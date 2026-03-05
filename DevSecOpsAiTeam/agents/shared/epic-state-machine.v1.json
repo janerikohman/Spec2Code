@@ -1,0 +1,107 @@
+{
+  "version": "1.0.0",
+  "owner_rule": "only_orchestrator_transitions_epic",
+  "statuses": [
+    "NEW",
+    "TRIAGE",
+    "READY FOR REFINEMENT",
+    "IN REFINEMENT",
+    "READY FOR DELIVERY",
+    "IN DELIVERY",
+    "READY FOR RELEASE",
+    "RELEASING",
+    "DONE",
+    "BLOCKED"
+  ],
+  "transitions": [
+    {
+      "from": "NEW",
+      "to": "TRIAGE",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "initial_problem_goals_constraints",
+        "confluence_templates_linked"
+      ]
+    },
+    {
+      "from": "TRIAGE",
+      "to": "READY FOR REFINEMENT",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "customer_contact_confirmed",
+        "risk_level_set",
+        "open_questions_initialized"
+      ]
+    },
+    {
+      "from": "READY FOR REFINEMENT",
+      "to": "IN REFINEMENT",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "refinement_started"
+      ]
+    },
+    {
+      "from": "IN REFINEMENT",
+      "to": "READY FOR DELIVERY",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "stories_linked",
+        "ac_measurable",
+        "nfrs_filled_or_na",
+        "questions_resolved_or_tracked",
+        "design_v1_linked",
+        "adrs_linked",
+        "tasks_subtasks_linked",
+        "security_review_recorded"
+      ]
+    },
+    {
+      "from": "READY FOR DELIVERY",
+      "to": "IN DELIVERY",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "delivery_run_started",
+        "team_assigned"
+      ]
+    },
+    {
+      "from": "IN DELIVERY",
+      "to": "READY FOR RELEASE",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "ci_tests_pass",
+        "sast_pass",
+        "dependency_scan_pass",
+        "secrets_scan_pass",
+        "iac_scan_pass",
+        "qa_evidence_linked",
+        "security_signoff_if_medium_high"
+      ]
+    },
+    {
+      "from": "READY FOR RELEASE",
+      "to": "RELEASING",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "release_readiness_confirmed",
+        "rollout_rollback_plan_exists"
+      ]
+    },
+    {
+      "from": "RELEASING",
+      "to": "DONE",
+      "owner": "orchestrator",
+      "evidence_required": [
+        "release_notes_published",
+        "runbook_updated",
+        "deployment_evidence_linked"
+      ]
+    }
+  ],
+  "special_transition": {
+    "from_any": true,
+    "to": "BLOCKED",
+    "owner": "orchestrator"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "name": "Epic Definition of Ready",
+  "required_items": [
+    {
+      "id": "business_goal",
+      "title": "Business goal/problem statement",
+      "description": "Clear statement of customer or business problem and expected outcome."
+    },
+    {
+      "id": "personas",
+      "title": "Target users/personas",
+      "description": "Who is affected and who receives value."
+    },
+    {
+      "id": "scope",
+      "title": "Scope boundaries",
+      "description": "In-scope and out-of-scope for this release."
+    },
+    {
+      "id": "acceptance_criteria",
+      "title": "Acceptance criteria",
+      "description": "Testable criteria for key flows."
+    },
+    {
+      "id": "dependencies",
+      "title": "Dependencies and constraints",
+      "description": "External dependencies, technical constraints, or blockers."
+    },
+    {
+      "id": "nfrs",
+      "title": "Non-functional requirements",
+      "description": "Security, performance, compliance, availability."
+    },
+    {
+      "id": "success_metrics",
+      "title": "Success metrics",
+      "description": "How success is measured after release."
+    },
+    {
+      "id": "rollout_plan",
+      "title": "Rollout/release expectation",
+      "description": "Release strategy, rollout phases, and risk handling."
+    }
+  ]
+}

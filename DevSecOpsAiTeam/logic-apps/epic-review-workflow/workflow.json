@@ -1,0 +1,324 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workflowName": {
+      "type": "string",
+      "defaultValue": "epic-review-workflow"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "jiraBaseUrl": {
+      "type": "string"
+    },
+    "jiraEmail": {
+      "type": "securestring"
+    },
+    "jiraApiToken": {
+      "type": "securestring"
+    },
+    "jiraProjectKey": {
+      "type": "string"
+    },
+    "epicJql": {
+      "type": "string"
+    },
+    "reviewEndpointUrl": {
+      "type": "string",
+      "metadata": {
+        "description": "Endpoint that evaluates an Epic against the DoR checklist and returns readiness decision JSON."
+      }
+    },
+    "reviewEndpointApiKey": {
+      "type": "securestring"
+    },
+    "runEveryMinutes": {
+      "type": "int",
+      "defaultValue": 120
+    },
+    "maxEpicsPerRun": {
+      "type": "int",
+      "defaultValue": 20
+    },
+    "orchestratorRunEnabled": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "orchestratorDryRun": {
+      "type": "bool",
+      "defaultValue": false
+    },
+    "orchestratorAllowTransitionExecution": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "orchestratorAllowDispatchExecution": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "orchestratorAllowCommentExecution": {
+      "type": "bool",
+      "defaultValue": true
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('workflowName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "jiraBaseUrl": {
+              "type": "String"
+            },
+            "jiraEmail": {
+              "type": "SecureString"
+            },
+            "jiraApiToken": {
+              "type": "SecureString"
+            },
+            "jiraProjectKey": {
+              "type": "String"
+            },
+            "epicJql": {
+              "type": "String"
+            },
+            "reviewEndpointUrl": {
+              "type": "String"
+            },
+            "reviewEndpointApiKey": {
+              "type": "SecureString"
+            },
+            "runEveryMinutes": {
+              "type": "Int"
+            },
+            "maxEpicsPerRun": {
+              "type": "Int"
+            },
+            "orchestratorRunEnabled": {
+              "type": "Bool"
+            },
+            "orchestratorDryRun": {
+              "type": "Bool"
+            },
+            "orchestratorAllowTransitionExecution": {
+              "type": "Bool"
+            },
+            "orchestratorAllowDispatchExecution": {
+              "type": "Bool"
+            },
+            "orchestratorAllowCommentExecution": {
+              "type": "Bool"
+            }
+          },
+          "triggers": {
+            "recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Minute",
+                "interval": "@parameters('runEveryMinutes')"
+              }
+            }
+          },
+          "actions": {
+            "Search_epics": {
+              "type": "Http",
+              "inputs": {
+                "method": "GET",
+                "uri": "@{concat(parameters('jiraBaseUrl'), '/rest/api/3/search/jql')}",
+                "headers": {
+                  "Authorization": "@{concat('Basic ', base64(concat(parameters('jiraEmail'), ':', parameters('jiraApiToken'))))}",
+                  "Accept": "application/json"
+                },
+                "queries": {
+                  "jql": "@{parameters('epicJql')}",
+                  "maxResults": "@{string(parameters('maxEpicsPerRun'))}",
+                  "fields": "summary,description,status,labels,comment"
+                }
+              },
+              "runAfter": {}
+            },
+            "Parse_search_result": {
+              "type": "ParseJson",
+              "inputs": {
+                "content": "@body('Search_epics')",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "fields": {
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "key"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "issues"
+                  ]
+                }
+              },
+              "runAfter": {
+                "Search_epics": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Initialize_epics_checked": {
+              "type": "InitializeVariable",
+              "inputs": {
+                "variables": [
+                  {
+                    "name": "epics_checked",
+                    "type": "integer",
+                    "value": 0
+                  }
+                ]
+              },
+              "runAfter": {
+                "Parse_search_result": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "For_each_epic": {
+              "type": "Foreach",
+              "foreach": "@body('Parse_search_result')?['issues']",
+              "runtimeConfiguration": {
+                "concurrency": {
+                  "repetitions": 1
+                }
+              },
+              "actions": {
+                "Increment_epics_checked": {
+                  "type": "IncrementVariable",
+                  "inputs": {
+                    "name": "epics_checked",
+                    "value": 1
+                  },
+                  "runAfter": {}
+                },
+                "Execute_orchestrator_cycle": {
+                  "type": "If",
+                  "expression": {
+                    "equals": [
+                      "@parameters('orchestratorRunEnabled')",
+                      true
+                    ]
+                  },
+                  "actions": {
+                    "Call_orchestrator_cycle_endpoint": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{replace(parameters('reviewEndpointUrl'), '/review_epic', '/execute_orchestrator_cycle')}",
+                        "headers": {
+                          "x-functions-key": "@{parameters('reviewEndpointApiKey')}",
+                          "Content-Type": "application/json"
+                        },
+                        "body": {
+                          "project_key": "@{parameters('jiraProjectKey')}",
+                          "mode": "single_epic",
+                          "epic_key": "@{items('For_each_epic')?['key']}",
+                          "dry_run": "@parameters('orchestratorDryRun')",
+                          "allow_transition_execution": "@parameters('orchestratorAllowTransitionExecution')",
+                          "allow_dispatch_execution": "@parameters('orchestratorAllowDispatchExecution')",
+                          "allow_comment_execution": "@parameters('orchestratorAllowCommentExecution')"
+                        }
+                      }
+                    }
+                  },
+                  "runAfter": {
+                    "Increment_epics_checked": [
+                      "Succeeded"
+                    ]
+                  }
+                }
+              },
+              "runAfter": {
+                "Initialize_epics_checked": [
+                  "Succeeded"
+                ]
+              }
+            },
+            "Compose_run_summary": {
+              "type": "Compose",
+              "inputs": {
+                "run_id": "@workflow().run.name",
+                "epics_checked": "@variables('epics_checked')",
+                "completed_at_utc": "@utcNow()"
+              },
+              "runAfter": {
+                "For_each_epic": [
+                  "Succeeded"
+                ]
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {
+          "jiraBaseUrl": {
+            "value": "[parameters('jiraBaseUrl')]"
+          },
+          "jiraEmail": {
+            "value": "[parameters('jiraEmail')]"
+          },
+          "jiraApiToken": {
+            "value": "[parameters('jiraApiToken')]"
+          },
+          "jiraProjectKey": {
+            "value": "[parameters('jiraProjectKey')]"
+          },
+          "epicJql": {
+            "value": "[parameters('epicJql')]"
+          },
+          "reviewEndpointUrl": {
+            "value": "[parameters('reviewEndpointUrl')]"
+          },
+          "reviewEndpointApiKey": {
+            "value": "[parameters('reviewEndpointApiKey')]"
+          },
+          "runEveryMinutes": {
+            "value": "[parameters('runEveryMinutes')]"
+          },
+          "maxEpicsPerRun": {
+            "value": "[parameters('maxEpicsPerRun')]"
+          },
+          "orchestratorRunEnabled": {
+            "value": "[parameters('orchestratorRunEnabled')]"
+          },
+          "orchestratorDryRun": {
+            "value": "[parameters('orchestratorDryRun')]"
+          },
+          "orchestratorAllowTransitionExecution": {
+            "value": "[parameters('orchestratorAllowTransitionExecution')]"
+          },
+          "orchestratorAllowDispatchExecution": {
+            "value": "[parameters('orchestratorAllowDispatchExecution')]"
+          },
+          "orchestratorAllowCommentExecution": {
+            "value": "[parameters('orchestratorAllowCommentExecution')]"
+          }
+        }
+      }
+    }
+  ]
+}

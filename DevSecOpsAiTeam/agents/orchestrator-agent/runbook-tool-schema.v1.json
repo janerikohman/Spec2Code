@@ -1,0 +1,313 @@
+{
+  "version": "1.0.0",
+  "tool_name": "execute_orchestrator_cycle",
+  "description": "Single orchestrator tool that evaluates Epic state/gates, validates evidence and approvals, dispatches work, and optionally executes the Epic transition.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "project_key",
+      "mode"
+    ],
+    "properties": {
+      "project_key": {
+        "type": "string",
+        "description": "Jira project key (e.g. KAN)."
+      },
+      "epic_key": {
+        "type": "string",
+        "description": "Optional explicit Epic key. If omitted, service picks eligible Epic(s) for current cycle."
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "single_epic",
+          "batch"
+        ],
+        "description": "single_epic: evaluate specific Epic; batch: evaluate up to batch_limit Epics."
+      },
+      "batch_limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 10
+      },
+      "dry_run": {
+        "type": "boolean",
+        "default": true,
+        "description": "If true, do not transition/comment/dispatch; only return proposed actions."
+      },
+      "allow_transition_execution": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true and dry_run is false, transition can be executed when gates pass."
+      },
+      "allow_dispatch_execution": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true and dry_run is false, agent task dispatch can be executed."
+      },
+      "allow_comment_execution": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true and dry_run is false, Epic comments can be posted."
+      },
+      "state_machine_version": {
+        "type": "string",
+        "default": "1.0.0",
+        "description": "Expected Epic state-machine version."
+      },
+      "evidence_policy_version": {
+        "type": "string",
+        "default": "1.0.0",
+        "description": "Expected evidence policy version."
+      },
+      "approval_policy": {
+        "type": "object",
+        "properties": {
+          "require_budget_exception_artifact": {
+            "type": "boolean",
+            "default": true
+          },
+          "require_policy_gate_change_artifact": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "customer_decision_threshold": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 3,
+        "description": "After this many failed iterations, orchestrator asks customer for explicit decision in Epic."
+      },
+      "idempotency_key": {
+        "type": "string",
+        "description": "Optional idempotency key for safe retries."
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "run_id",
+      "mode",
+      "items"
+    ],
+    "properties": {
+      "run_id": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "single_epic",
+          "batch"
+        ]
+      },
+      "summary": {
+        "type": "object",
+        "properties": {
+          "epics_evaluated": {
+            "type": "integer"
+          },
+          "transitions_executed": {
+            "type": "integer"
+          },
+          "dispatches_executed": {
+            "type": "integer"
+          },
+          "comments_executed": {
+            "type": "integer"
+          },
+          "blocked_items": {
+            "type": "integer"
+          }
+        }
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "epic_key",
+            "current_status",
+            "gate_checks",
+            "proposed_actions"
+          ],
+          "properties": {
+            "epic_key": {
+              "type": "string"
+            },
+            "current_status": {
+              "type": "string"
+            },
+            "proposed_next_status": {
+              "type": "string"
+            },
+            "transition_executed": {
+              "type": "boolean"
+            },
+            "gate_checks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "gate",
+                  "passed"
+                ],
+                "properties": {
+                  "gate": {
+                    "type": "string"
+                  },
+                  "passed": {
+                    "type": "boolean"
+                  },
+                  "evidence_links": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "approval_checks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "approval_type",
+                  "required",
+                  "artifact_exists"
+                ],
+                "properties": {
+                  "approval_type": {
+                    "type": "string",
+                    "enum": [
+                      "budget_exception",
+                      "policy_gate_change"
+                    ]
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "artifact_exists": {
+                    "type": "boolean"
+                  },
+                  "artifact_links": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "dispatches": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "agent_role": {
+                    "type": "string"
+                  },
+                  "task": {
+                    "type": "string"
+                  },
+                  "executed": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "customer_decision_required": {
+              "type": "boolean"
+            },
+            "proposed_actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "executed_actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "example_request": {
+    "project_key": "KAN",
+    "mode": "single_epic",
+    "epic_key": "KAN-123",
+    "dry_run": true,
+    "allow_transition_execution": false,
+    "allow_dispatch_execution": false,
+    "allow_comment_execution": false,
+    "customer_decision_threshold": 3
+  },
+  "example_response": {
+    "run_id": "orchestrator-2026-03-04T12:00:00Z",
+    "mode": "single_epic",
+    "summary": {
+      "epics_evaluated": 1,
+      "transitions_executed": 0,
+      "dispatches_executed": 1,
+      "comments_executed": 1,
+      "blocked_items": 0
+    },
+    "items": [
+      {
+        "epic_key": "KAN-123",
+        "current_status": "IN REFINEMENT",
+        "proposed_next_status": "READY FOR DELIVERY",
+        "transition_executed": false,
+        "gate_checks": [
+          {
+            "gate": "stories_linked",
+            "passed": true,
+            "evidence_links": [
+              "https://jira.example/browse/KAN-456"
+            ],
+            "notes": ""
+          }
+        ],
+        "approval_checks": [
+          {
+            "approval_type": "budget_exception",
+            "required": false,
+            "artifact_exists": false,
+            "artifact_links": []
+          }
+        ],
+        "dispatches": [
+          {
+            "agent_role": "security",
+            "task": "final sign-off for medium risk",
+            "executed": false
+          }
+        ],
+        "customer_decision_required": false,
+        "proposed_actions": [
+          "dispatch security review",
+          "prepare transition to READY FOR DELIVERY"
+        ],
+        "executed_actions": [],
+        "errors": []
+      }
+    ]
+  }
+}

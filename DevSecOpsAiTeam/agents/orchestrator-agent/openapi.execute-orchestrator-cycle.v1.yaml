@@ -1,0 +1,234 @@
+openapi: 3.0.3
+info:
+  title: Orchestrator Runbook Tool API
+  version: 1.0.0
+  description: >
+    Single orchestrator endpoint for Epic state-machine evaluation, evidence/approval checks,
+    agent dispatch planning, and optional transition execution.
+servers:
+  - url: https://your-orchestrator-endpoint.example.com
+paths:
+  /api/execute_orchestrator_cycle:
+    post:
+      operationId: execute_orchestrator_cycle
+      summary: Execute one orchestrator cycle
+      description: >
+        Evaluates one or more Epics against workflow gates and evidence policy.
+        Can run in dry-run mode or execute transitions/dispatch/comments based on flags.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - project_key
+                - mode
+              properties:
+                project_key:
+                  type: string
+                  description: Jira project key (e.g. KAN).
+                epic_key:
+                  type: string
+                  description: Optional explicit Epic key.
+                mode:
+                  type: string
+                  enum: [single_epic, batch]
+                batch_limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 10
+                dry_run:
+                  type: boolean
+                  default: true
+                allow_transition_execution:
+                  type: boolean
+                  default: false
+                allow_dispatch_execution:
+                  type: boolean
+                  default: false
+                allow_comment_execution:
+                  type: boolean
+                  default: false
+                state_machine_version:
+                  type: string
+                  default: "1.0.0"
+                evidence_policy_version:
+                  type: string
+                  default: "1.0.0"
+                approval_policy:
+                  type: object
+                  properties:
+                    require_budget_exception_artifact:
+                      type: boolean
+                      default: true
+                    require_policy_gate_change_artifact:
+                      type: boolean
+                      default: true
+                customer_decision_threshold:
+                  type: integer
+                  minimum: 1
+                  default: 3
+                idempotency_key:
+                  type: string
+            examples:
+              dry_run_single:
+                value:
+                  project_key: KAN
+                  mode: single_epic
+                  epic_key: KAN-123
+                  dry_run: true
+                  allow_transition_execution: false
+                  allow_dispatch_execution: false
+                  allow_comment_execution: false
+      responses:
+        "200":
+          description: Cycle evaluation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, mode, items]
+                properties:
+                  run_id:
+                    type: string
+                  mode:
+                    type: string
+                    enum: [single_epic, batch]
+                  summary:
+                    type: object
+                    properties:
+                      epics_evaluated:
+                        type: integer
+                      transitions_executed:
+                        type: integer
+                      dispatches_executed:
+                        type: integer
+                      comments_executed:
+                        type: integer
+                      blocked_items:
+                        type: integer
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [epic_key, current_status, gate_checks, proposed_actions]
+                      properties:
+                        epic_key:
+                          type: string
+                        current_status:
+                          type: string
+                        proposed_next_status:
+                          type: string
+                        transition_executed:
+                          type: boolean
+                        gate_checks:
+                          type: array
+                          items:
+                            type: object
+                            required: [gate, passed]
+                            properties:
+                              gate:
+                                type: string
+                              passed:
+                                type: boolean
+                              evidence_links:
+                                type: array
+                                items:
+                                  type: string
+                              notes:
+                                type: string
+                        approval_checks:
+                          type: array
+                          items:
+                            type: object
+                            required: [approval_type, required, artifact_exists]
+                            properties:
+                              approval_type:
+                                type: string
+                                enum: [budget_exception, policy_gate_change]
+                              required:
+                                type: boolean
+                              artifact_exists:
+                                type: boolean
+                              artifact_links:
+                                type: array
+                                items:
+                                  type: string
+                        dispatches:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              agent_role:
+                                type: string
+                              task:
+                                type: string
+                              executed:
+                                type: boolean
+                        customer_decision_required:
+                          type: boolean
+                        proposed_actions:
+                          type: array
+                          items:
+                            type: string
+                        executed_actions:
+                          type: array
+                          items:
+                            type: string
+                        errors:
+                          type: array
+                          items:
+                            type: string
+              examples:
+                sample:
+                  value:
+                    run_id: orchestrator-2026-03-04T12:00:00Z
+                    mode: single_epic
+                    summary:
+                      epics_evaluated: 1
+                      transitions_executed: 0
+                      dispatches_executed: 1
+                      comments_executed: 1
+                      blocked_items: 0
+                    items:
+                      - epic_key: KAN-123
+                        current_status: IN REFINEMENT
+                        proposed_next_status: READY FOR DELIVERY
+                        transition_executed: false
+                        gate_checks:
+                          - gate: stories_linked
+                            passed: true
+                            evidence_links:
+                              - https://jira.example/browse/KAN-456
+                            notes: ""
+                        approval_checks:
+                          - approval_type: budget_exception
+                            required: false
+                            artifact_exists: false
+                            artifact_links: []
+                        dispatches:
+                          - agent_role: security
+                            task: final sign-off for medium risk
+                            executed: false
+                        customer_decision_required: false
+                        proposed_actions:
+                          - dispatch security review
+                          - prepare transition to READY FOR DELIVERY
+                        executed_actions: []
+                        errors: []
+        "400":
+          description: Invalid request
+        "401":
+          description: Unauthorized
+        "500":
+          description: Internal error
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: query
+      name: code
