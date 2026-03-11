@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=<storage-account>;AccountKey=<key>;EndpointSuffix=core.windows.net",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "FUNCTIONS_EXTENSION_VERSION": "~4",
+    "JIRA_BASE_URL": "https://your-org.atlassian.net",
+    "JIRA_EMAIL": "your-email@company.com",
+    "JIRA_API_TOKEN": "your-api-token",
+    "JIRA_PROJECT_KEY": "KAN",
+    "REVIEW_ENDPOINT_BASE_URL": "https://func-app.azurewebsites.net/api",
+    "REVIEW_ENDPOINT_API_KEY": "your-endpoint-api-key"
+  }
+}

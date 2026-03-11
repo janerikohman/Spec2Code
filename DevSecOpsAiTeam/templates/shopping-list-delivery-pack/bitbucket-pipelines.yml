@@ -1,0 +1,60 @@
+image: maven:3.9.9-eclipse-temurin-21
+
+options:
+  size: 2x
+
+definitions:
+  caches:
+    maven: ~/.m2/repository
+  steps:
+    - step: &build_test
+        name: Build and Test
+        caches:
+          - maven
+        script:
+          - mvn -B -ntp clean test package
+        artifacts:
+          - target/*.jar
+
+    - step: &dependency_scan
+        name: Dependency Scan
+        caches:
+          - maven
+        script:
+          - mvn -B -ntp org.owasp:dependency-check-maven:check -Dformat=HTML -DfailBuildOnCVSS=8
+        artifacts:
+          - target/dependency-check-report.html
+
+    - step: &deploy_infra
+        name: Deploy IaC (Bicep)
+        image: mcr.microsoft.com/azure-cli:2.64.0
+        script:
+          - az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"
+          - az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+          - az group create -n "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION"
+          - az deployment group create -g "$AZURE_RESOURCE_GROUP" -f infra/bicep/main.bicep -p appName="$AZURE_WEBAPP_NAME" planName="$AZURE_PLAN_NAME" skuName="${AZURE_PLAN_SKU:-B1}"
+
+    - step: &deploy_app
+        name: Deploy App (JAR)
+        image: mcr.microsoft.com/azure-cli:2.64.0
+        script:
+          - az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID"
+          - az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+          - test -f target/shopping-list-app-1.0.0.jar
+          - az webapp deploy --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME" --type jar --src-path target/shopping-list-app-1.0.0.jar
+          - az webapp restart --resource-group "$AZURE_RESOURCE_GROUP" --name "$AZURE_WEBAPP_NAME"
+          - APP_URL="https://${AZURE_WEBAPP_NAME}.azurewebsites.net"
+          - echo "App URL: ${APP_URL}"
+          - curl -fsS "${APP_URL}" | head -n 20
+
+pipelines:
+  default:
+    - step: *build_test
+    - step: *dependency_scan
+
+  branches:
+    main:
+      - step: *build_test
+      - step: *dependency_scan
+      - step: *deploy_infra
+      - step: *deploy_app

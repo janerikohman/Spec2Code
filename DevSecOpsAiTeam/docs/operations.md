@@ -2,24 +2,20 @@
 
 ## Current Runtime Model
 
-- Logic App runs on a recurrence schedule and scans Jira Epics.
-- For each Epic, Logic App calls `execute_orchestrator_cycle`.
+- Jira event-driven automation/webhook calls `/api/execute_orchestrator_cycle`.
+- Foundry agents are control plane; Function app is tool adapter via explicit operations (`/api/tool/...`).
 - Orchestrator performs gate checks, transitions, dispatches role stories, and posts missing-evidence comments.
-- Missing-evidence comments are deduplicated by hash (`[orc-hash:...]`) to avoid 5-minute spam loops.
+- Missing-evidence comments are deduplicated by hash (`[orc-hash:...]`).
 
-## Run Cadence
+## Trigger Model
 
-- Default low-cost cadence: every 60-240 minutes.
-- Demo cadence: every 5 minutes (requires `ALLOW_HIGH_FREQUENCY_SCHEDULE=true`).
-- Keep Logic App foreach concurrency at `1`.
+- Production trigger is event-driven from Jira only.
+- Manual validation trigger remains available via:
+  - `bash scripts/test-orchestrator-cycle.sh`
 
 ## Monitoring
 
-- Read `Compose_run_summary` from each Logic App run:
-  - `run_id`
-  - `epics_checked`
-  - `completed_at_utc`
-- For detailed behavior, inspect orchestrator action output per Epic:
+- For behavior, inspect orchestrator output per Epic:
   - `gate_checks`
   - `proposed_actions`
   - `executed_actions`
@@ -45,14 +41,29 @@
 ## Manual Override
 
 - Add label `agent-ignore` to skip an Epic (if this rule is implemented in your fork/runtime).
-- Disable orchestrator execution globally via:
-  - `ORCHESTRATOR_RUN_ENABLED=false`
 
 ## Change Management
 
 - Update state/gate logic in:
   - `functions/review-endpoint/function_app.py`
-  - `agents/shared/epic-state-machine.v1.json`
+  - `agents/shared/epic-state-machine.json`
+- Update role behavior prompts in:
+  - `agents/*/system-instructions.md`
+  - Re-register assistants after prompt updates:
+    - `bash scripts/register-foundry-role-assistants.sh`
 - Redeploy after any workflow/function change:
   - `bash scripts/deploy-review-function.sh`
-  - `bash scripts/deploy-logic-app.sh`
+
+## Execution Baseline For Real Delivery
+
+- Apply runnable delivery assets to the target app repository:
+  - `bash scripts/apply-shopping-list-delivery-pack.sh <target-repo-path>`
+- Required generated assets:
+  - `bitbucket-pipelines.yml`
+  - `infra/bicep/main.bicep`
+  - `infra/bicep/deploy.sh`
+  - `scripts/e2e-local.sh`
+- Role expectation:
+  - DevOps agent commits pipeline/IaC.
+  - Developer agent commits feature code + tests.
+  - QA agent runs e2e and links evidence.

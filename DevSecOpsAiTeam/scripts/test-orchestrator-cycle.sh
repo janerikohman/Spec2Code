@@ -26,7 +26,7 @@ get_secret_from_kv() {
     --only-show-errors
 }
 
-REVIEW_ENDPOINT_URL="${REVIEW_ENDPOINT_URL:-$(get_env REVIEW_ENDPOINT_URL)}"
+REVIEW_ENDPOINT_BASE_URL="${REVIEW_ENDPOINT_BASE_URL:-$(get_env REVIEW_ENDPOINT_BASE_URL)}"
 REVIEW_ENDPOINT_API_KEY="${REVIEW_ENDPOINT_API_KEY:-$(get_env REVIEW_ENDPOINT_API_KEY)}"
 JIRA_PROJECT_KEY="${JIRA_PROJECT_KEY:-$(get_env JIRA_PROJECT_KEY)}"
 AZURE_KEY_VAULT_NAME="${AZURE_KEY_VAULT_NAME:-$(get_env AZURE_KEY_VAULT_NAME)}"
@@ -41,12 +41,12 @@ if [[ -z "${REVIEW_ENDPOINT_API_KEY}" && -n "${AZURE_KEY_VAULT_NAME}" && -n "${R
   REVIEW_ENDPOINT_API_KEY="$(get_secret_from_kv "${AZURE_KEY_VAULT_NAME}" "${REVIEW_ENDPOINT_API_KEY_SECRET_NAME}" 2>/dev/null || true)"
 fi
 
-if [[ -z "${REVIEW_ENDPOINT_URL}" || -z "${REVIEW_ENDPOINT_API_KEY}" || -z "${JIRA_PROJECT_KEY}" ]]; then
-  echo "Missing REVIEW_ENDPOINT_URL, REVIEW_ENDPOINT_API_KEY, or JIRA_PROJECT_KEY."
+if [[ -z "${REVIEW_ENDPOINT_BASE_URL}" || -z "${REVIEW_ENDPOINT_API_KEY}" || -z "${JIRA_PROJECT_KEY}" ]]; then
+  echo "Missing REVIEW_ENDPOINT_BASE_URL, REVIEW_ENDPOINT_API_KEY, or JIRA_PROJECT_KEY."
   exit 1
 fi
 
-ORCHESTRATOR_URL="${REVIEW_ENDPOINT_URL%/review_epic}/execute_orchestrator_cycle"
+ORCHESTRATOR_URL="${REVIEW_ENDPOINT_BASE_URL}/execute_orchestrator_cycle"
 
 if [[ -n "${TARGET_EPIC_KEY}" ]]; then
   REQUEST_BODY="$(jq -n \
@@ -85,10 +85,11 @@ else
   )"
 fi
 
-echo "POST ${ORCHESTRATOR_URL}?code=***"
+echo "POST ${ORCHESTRATOR_URL} (x-functions-key: ***)"
 curl -sS \
   -X POST \
   -H "Content-Type: application/json" \
-  "${ORCHESTRATOR_URL}?code=${REVIEW_ENDPOINT_API_KEY}" \
+  -H "x-functions-key: ${REVIEW_ENDPOINT_API_KEY}" \
+  "${ORCHESTRATOR_URL}" \
   -d "${REQUEST_BODY}" \
   | jq .

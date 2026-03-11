@@ -18,21 +18,17 @@ JIRA_EMAIL="$(get_env JIRA_EMAIL)"
 JIRA_API_TOKEN="$(get_env JIRA_API_TOKEN)"
 REVIEW_ENDPOINT_API_KEY="$(get_env REVIEW_ENDPOINT_API_KEY)"
 BITBUCKET_API_TOKEN="$(get_env BITBUCKET_API_TOKEN)"
-BITBUCKET_USERNAME="$(get_env BITBUCKET_USERNAME)"
-BITBUCKET_APP_PASSWORD="$(get_env BITBUCKET_APP_PASSWORD)"
 
 JIRA_EMAIL_SECRET_NAME="$(get_env JIRA_EMAIL_SECRET_NAME)"
 JIRA_API_TOKEN_SECRET_NAME="$(get_env JIRA_API_TOKEN_SECRET_NAME)"
 REVIEW_ENDPOINT_API_KEY_SECRET_NAME="$(get_env REVIEW_ENDPOINT_API_KEY_SECRET_NAME)"
 BITBUCKET_API_TOKEN_SECRET_NAME="$(get_env BITBUCKET_API_TOKEN_SECRET_NAME)"
-BITBUCKET_USERNAME_SECRET_NAME="$(get_env BITBUCKET_USERNAME_SECRET_NAME)"
-BITBUCKET_APP_PASSWORD_SECRET_NAME="$(get_env BITBUCKET_APP_PASSWORD_SECRET_NAME)"
 
 : "${AZURE_RESOURCE_GROUP:?Missing AZURE_RESOURCE_GROUP in .env}"
 : "${AZURE_LOCATION:?Missing AZURE_LOCATION in .env}"
 
 if [[ -z "${AZURE_KEY_VAULT_NAME}" ]]; then
-  AZURE_KEY_VAULT_NAME="kv-epic-po-${RANDOM}${RANDOM}"
+  AZURE_KEY_VAULT_NAME="kv-devsecops-${RANDOM}${RANDOM}"
   AZURE_KEY_VAULT_NAME="${AZURE_KEY_VAULT_NAME:0:24}"
   echo "Creating Key Vault ${AZURE_KEY_VAULT_NAME}..."
   az keyvault create \
@@ -48,8 +44,6 @@ fi
 : "${JIRA_API_TOKEN_SECRET_NAME:=jira-api-token}"
 : "${REVIEW_ENDPOINT_API_KEY_SECRET_NAME:=review-endpoint-api-key}"
 : "${BITBUCKET_API_TOKEN_SECRET_NAME:=bitbucket-api-token}"
-: "${BITBUCKET_USERNAME_SECRET_NAME:=bitbucket-username}"
-: "${BITBUCKET_APP_PASSWORD_SECRET_NAME:=bitbucket-app-password}"
 
 if [[ -n "${JIRA_EMAIL}" ]]; then
   az keyvault secret set --vault-name "${AZURE_KEY_VAULT_NAME}" --name "${JIRA_EMAIL_SECRET_NAME}" --value "${JIRA_EMAIL}" --only-show-errors 1>/tmp/kv-jira-email.json
@@ -63,12 +57,6 @@ fi
 if [[ -n "${BITBUCKET_API_TOKEN}" ]]; then
   az keyvault secret set --vault-name "${AZURE_KEY_VAULT_NAME}" --name "${BITBUCKET_API_TOKEN_SECRET_NAME}" --value "${BITBUCKET_API_TOKEN}" --only-show-errors 1>/tmp/kv-bb-token.json
 fi
-if [[ -n "${BITBUCKET_USERNAME}" ]]; then
-  az keyvault secret set --vault-name "${AZURE_KEY_VAULT_NAME}" --name "${BITBUCKET_USERNAME_SECRET_NAME}" --value "${BITBUCKET_USERNAME}" --only-show-errors 1>/tmp/kv-bb-user.json
-fi
-if [[ -n "${BITBUCKET_APP_PASSWORD}" ]]; then
-  az keyvault secret set --vault-name "${AZURE_KEY_VAULT_NAME}" --name "${BITBUCKET_APP_PASSWORD_SECRET_NAME}" --value "${BITBUCKET_APP_PASSWORD}" --only-show-errors 1>/tmp/kv-bb-pass.json
-fi
 
 python3 - <<PY
 from pathlib import Path
@@ -81,14 +69,10 @@ updates = {
     "JIRA_API_TOKEN_SECRET_NAME": "${JIRA_API_TOKEN_SECRET_NAME}",
     "REVIEW_ENDPOINT_API_KEY_SECRET_NAME": "${REVIEW_ENDPOINT_API_KEY_SECRET_NAME}",
     "BITBUCKET_API_TOKEN_SECRET_NAME": "${BITBUCKET_API_TOKEN_SECRET_NAME}",
-    "BITBUCKET_USERNAME_SECRET_NAME": "${BITBUCKET_USERNAME_SECRET_NAME}",
-    "BITBUCKET_APP_PASSWORD_SECRET_NAME": "${BITBUCKET_APP_PASSWORD_SECRET_NAME}",
     "JIRA_EMAIL": "",
     "JIRA_API_TOKEN": "",
     "REVIEW_ENDPOINT_API_KEY": "",
     "BITBUCKET_API_TOKEN": "",
-    "BITBUCKET_USERNAME": "",
-    "BITBUCKET_APP_PASSWORD": "",
 }
 out = []
 seen = set()

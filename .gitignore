@@ -1,2 +1,16 @@
 .venv/
 .DS_Store
+
+# Environment files — contain real credentials, subscription IDs, and resource names.
+# Commit .env.example only; never .env or .env.agentic.
+.env
+.env.agentic
+DevSecOpsAiTeam/.env
+DevSecOpsAiTeam/.env.agentic
+
+# Deployment summaries contain subscription IDs and real resource endpoints.
+DevSecOpsAiTeam/DEPLOYMENT_SUMMARY.md
+
+# Local settings for Azure Functions
+functions/*/local.settings.json
+DevSecOpsAiTeam/functions/*/local.settings.json

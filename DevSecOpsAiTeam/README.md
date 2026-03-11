@@ -1,38 +1,67 @@
-# Spec2Code
+# Spec2Code - 100% Agentic Orchestration (v2.0)
 
-Agentic Epic-delivery workflow for Jira using Azure AI Foundry + Logic App + Azure Function orchestrator.
+Epic-delivery workflow for Jira using **100% Agentic Architecture**:
+- **AI Foundry**: Coordinator Agent (master orchestrator) + 8 role agents (autonomous, peer-to-peer collaboration)
+- **Azure Function**: Minimal webhook receiver only (100 lines)
+- **Jira**: Event-driven ingress and delivery tracking
 
 ## Repository Structure
 
-- `agents/orchestrator-agent/`
-  - Foundry instructions and tool schema/OpenAPI for the orchestrator agent.
-- `agents/*-agent/`
-  - Role-specific instructions for PO, Architect, Security, DevOps, QA, FinOps, Release.
-- `logic-apps/epic-review-workflow/`
-  - Scheduled Jira poller that calls orchestrator endpoint per Epic.
-- `shared/dor/`
-  - Versioned Definition of Ready (DoR) checklist schema.
-- `shared/templates/`
-  - Legacy DoR template assets used by `scripts/test-dor.sh`.
+### Core Agents (v2.0 - 100% Agentic)
+
+- **`agents/coordinator-agent/`**
+  - Master orchestrator instructions (450+ lines)
+  - Responsible for epic orchestration, intelligent sequencing, feedback loops, gate verification
+  - Runs in Azure AI Foundry
+
+- **`agents/*-agent/`** (8 specialized agents)
+  - `po-requirements-agent/` - Product Owner requirements gathering
+  - `architect-agent/` - Architecture & design decisions
+  - `security-architect-agent/` - Security posture & threat modeling
+  - `devops-iac-agent/` - Infrastructure automation & cost optimization
+  - `developer-agent/` - Implementation planning
+  - `tester-qa-agent/` - Quality assurance & testability
+  - `finops-agent/` - Cost optimization & budget tracking
+  - `release-manager-agent/` - Release coordination & delivery verification
+  
+  All agents support:
+  - Peer-to-peer communication via `invoke_agent()` tool
+  - Confidence scoring (0.0-1.0) with feedback loops
+  - Mandatory DoR gate verification per phase
+  - Automatic Jira/Confluence integration
+
+### Infrastructure & Configuration
+
+- **`functions/review-endpoint/`**
+  - `function_app.py` - Minimal webhook (100 lines) - delegates to Coordinator Agent
+  - `coordinator_agent.py` - Orchestration engine (900 lines, fully implemented)
+  - `requirements.txt` - Python dependencies
+
+- **`agents/shared/`**
+  - `agent-communication-protocol-v2.json` - Agent-to-agent messaging contract
+  - `epic-state-machine-v2.json` - 19-state workflow for epic delivery
+  - `evidence-requirements.md` - DoR gate definitions
+
+### Configuration
+
+- **`.env.agentic`** - Foundry agent registry, confidence thresholds, feature flags, Jira/Confluence endpoints
+- **`.env.example`** - Template for local setup
+
+### Documentation & Deployment
+
+- **[DEPLOY-V2.md](DEPLOY-V2.md)** ⭐ **Deployment script → START HERE** (10 min to production)
 - `docs/`
-  - Setup, architecture, and operational guidance.
+  - `architecture.md` - System design
+  - `operations.md` - Operational procedures
+  - `setup-vscode-foundry.md` - Foundry setup guide
+- `shared/dor/`
+  - Definition of Ready gates for each phase
 
-## Quick Start
+## 🚀 Quick Deploy
 
-1. Read [setup-vscode-foundry.md](/Users/shaho/Library/CloudStorage/OneDrive-KnowitAB/Poc/S2C/Spec2Code/docs/setup-vscode-foundry.md).
-2. Apply low-cost defaults from [min-cost-baseline.md](/Users/shaho/Library/CloudStorage/OneDrive-KnowitAB/Poc/S2C/Spec2Code/docs/min-cost-baseline.md).
-3. Configure Jira and Azure values in `.env` based on `.env.example`.
-4. Move secrets to Key Vault with `bash scripts/sync-secrets-to-keyvault.sh`.
-5. Deploy review endpoint using `bash scripts/deploy-review-function.sh`.
-6. Deploy the workflow with `bash scripts/deploy-logic-app.sh`.
-7. Create/update your Foundry orchestrator agent using `agents/orchestrator-agent/system-instructions.md`.
-8. Run one dry-run against a Jira test Epic before enabling/raising schedule frequency.
+1. Edit `.env.agentic` with your Foundry project ID
+2. Run commands from [DEPLOY-V2.md](DEPLOY-V2.md) (~10 minutes)
+3. Test with 3 test epics in Jira
+4. Get approval → production ready
 
-## Orchestrator Automation
-
-- Register/update orchestrator agent tool in Foundry:
-  - `bash scripts/register-foundry-orchestrator-tool.sh`
-- Test orchestrator cycle (dry-run):
-  - `bash scripts/test-orchestrator-cycle.sh`
-- One-command demo (create Epic + run dry-run):
-  - `bash scripts/demo-epic-progress.sh`
+**Status**: Ready for immediate deployment

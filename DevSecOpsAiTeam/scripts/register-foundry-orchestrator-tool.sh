@@ -37,10 +37,11 @@ AGENT_NAME="${AI_FOUNDRY_ORCHESTRATOR_AGENT_NAME:-$(get_env AI_FOUNDRY_ORCHESTRA
 MODEL_DEPLOYMENT="${AI_FOUNDRY_MODEL_DEPLOYMENT:-$(get_env AI_FOUNDRY_MODEL_DEPLOYMENT)}"
 API_VERSION="${AI_FOUNDRY_API_VERSION:-2025-05-15-preview}"
 
-REVIEW_ENDPOINT_URL="${REVIEW_ENDPOINT_URL:-$(get_env REVIEW_ENDPOINT_URL)}"
+REVIEW_ENDPOINT_BASE_URL="${REVIEW_ENDPOINT_BASE_URL:-$(get_env REVIEW_ENDPOINT_BASE_URL)}"
 REVIEW_ENDPOINT_API_KEY="${REVIEW_ENDPOINT_API_KEY:-$(get_env REVIEW_ENDPOINT_API_KEY)}"
 AZURE_KEY_VAULT_NAME="${AZURE_KEY_VAULT_NAME:-$(get_env AZURE_KEY_VAULT_NAME)}"
 REVIEW_ENDPOINT_API_KEY_SECRET_NAME="${REVIEW_ENDPOINT_API_KEY_SECRET_NAME:-$(get_env REVIEW_ENDPOINT_API_KEY_SECRET_NAME)}"
+AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID="${AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID:-$(get_env AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID)}"
 
 AGENT_NAME="${AGENT_NAME:-orchestrator-agent}"
 
@@ -73,54 +74,262 @@ if [[ -z "${REVIEW_ENDPOINT_API_KEY}" && -n "${AZURE_KEY_VAULT_NAME}" && -n "${R
   REVIEW_ENDPOINT_API_KEY="$(get_secret_from_kv "${AZURE_KEY_VAULT_NAME}" "${REVIEW_ENDPOINT_API_KEY_SECRET_NAME}")"
 fi
 
-if [[ -z "${REVIEW_ENDPOINT_URL}" || -z "${REVIEW_ENDPOINT_API_KEY}" ]]; then
-  echo "Missing REVIEW_ENDPOINT_URL or REVIEW_ENDPOINT_API_KEY (or Key Vault secret)."
+if [[ -z "${REVIEW_ENDPOINT_BASE_URL}" ]]; then
+  echo "Missing REVIEW_ENDPOINT_BASE_URL."
+  exit 1
+fi
+if [[ -z "${AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID}" ]]; then
+  echo "Missing AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID."
   exit 1
 fi
 
-OPENAPI_URL="${REVIEW_ENDPOINT_URL%/review_epic}/openapi.execute_orchestrator_cycle.v1.json?code=${REVIEW_ENDPOINT_API_KEY}"
+TOOLS_SERVER_URL="${REVIEW_ENDPOINT_BASE_URL%/api}"
 INSTRUCTIONS_FILE="agents/orchestrator-agent/system-instructions.md"
 [[ -f "${INSTRUCTIONS_FILE}" ]] || { echo "Missing ${INSTRUCTIONS_FILE}"; exit 1; }
 
 tmp_payload="$(mktemp /tmp/foundry-orchestrator-payload.XXXXXX.json)"
+tmp_tools_spec="$(mktemp /tmp/foundry-tools-spec.XXXXXX.json)"
 cleanup() {
-  rm -f "${tmp_payload}"
+  rm -f "${tmp_payload}" "${tmp_tools_spec}"
 }
 trap cleanup EXIT
+
+jq -n \
+  --arg server_url "${TOOLS_SERVER_URL}" \
+  '{
+    openapi: "3.0.3",
+    info: { title: "Foundry Tool Adapter API", version: "2.0.0" },
+    servers: [{ url: $server_url }],
+    paths: {
+      "/api/tool/jira/get_issue_context": {
+        post: {
+          operationId: "jira_get_issue_context",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["issue_key"],
+                  properties: {
+                    issue_key: { type: "string" },
+                    include_comments: { type: "boolean" },
+                    max_comments: { type: "integer" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Issue context result" }
+          }
+        }
+      },
+      "/api/tool/jira/add_comment": {
+        post: {
+          operationId: "jira_add_comment",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["issue_key", "comment"],
+                  properties: {
+                    issue_key: { type: "string" },
+                    comment: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Comment result" }
+          }
+        }
+      },
+      "/api/tool/jira/transition_issue": {
+        post: {
+          operationId: "jira_transition_issue",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["issue_key", "to_status"],
+                  properties: {
+                    issue_key: { type: "string" },
+                    to_status: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Transition result" }
+          }
+        }
+      },
+      "/api/tool/jira/list_open_dispatch_issues": {
+        post: {
+          operationId: "jira_list_open_dispatch_issues",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["project_key", "epic_key"],
+                  properties: {
+                    project_key: { type: "string" },
+                    epic_key: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Open dispatch issues result" }
+          }
+        }
+      },
+      "/api/tool/jira/create_dispatch_story": {
+        post: {
+          operationId: "jira_create_dispatch_story",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["project_key", "epic_key", "role", "task"],
+                  properties: {
+                    project_key: { type: "string" },
+                    epic_key: { type: "string" },
+                    role: { type: "string" },
+                    task: { type: "string" },
+                    stage: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Dispatch story result" }
+          }
+        }
+      },
+      "/api/tool/confluence/create_page": {
+        post: {
+          operationId: "confluence_create_page",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["title", "storage_html"],
+                  properties: {
+                    title: { type: "string" },
+                    storage_html: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Confluence page result" }
+          }
+        }
+      },
+      "/api/tool/foundry/run_role_agent": {
+        post: {
+          operationId: "foundry_run_role_agent",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["role", "epic_key", "story_key"],
+                  properties: {
+                    role: { type: "string" },
+                    epic_key: { type: "string" },
+                    story_key: { type: "string" },
+                    details: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Role agent execution result" }
+          }
+        }
+      }
+    },
+    components: {
+      securitySchemes: {
+        functionKeyHeader: {
+          type: "apiKey",
+          name: "x-functions-key",
+          in: "header"
+        }
+      }
+    },
+    security: [{ functionKeyHeader: [] }]
+  }' > "${tmp_tools_spec}"
 
 jq -n \
   --arg name "${AGENT_NAME}" \
   --arg model "${MODEL_DEPLOYMENT}" \
   --rawfile instructions "${INSTRUCTIONS_FILE}" \
-  --arg openapi_url "${OPENAPI_URL}" \
+  --slurpfile tools_spec "${tmp_tools_spec}" \
+  --arg project_connection_id "${AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID}" \
   '{
     name: $name,
-    description: "Epic delivery orchestrator agent",
-    definition: {
-      kind: "prompt",
-      model: $model,
-      instructions: $instructions,
-      tools: [
-        {
-          type: "openapi",
-          openapi: {
-            spec: { url: $openapi_url }
-          }
+    model: $model,
+    instructions: $instructions,
+    tools: [
+      {
+        type: "openapi",
+        openapi: {
+          name: "foundry_tools_api",
+          auth: {
+            type: "connection",
+            security_scheme: { connection_id: $project_connection_id }
+          },
+          spec: $tools_spec[0]
         }
-      ]
-    }
+      }
+    ]
   }' > "${tmp_payload}"
 
-echo "Registering/updating Foundry agent '${AGENT_NAME}' with OpenAPI tool..."
+echo "Registering/updating Foundry assistant '${AGENT_NAME}' with OpenAPI tools..."
+assistants_json="$(curl -sS -H "Authorization: Bearer ${TOKEN}" "${PROJECT_ENDPOINT}/assistants?api-version=${API_VERSION}")"
+existing_id="$(echo "${assistants_json}" | jq -r --arg name "${AGENT_NAME}" '.data[]? | select(.name==$name) | .id' | head -n1)"
+
 resp_file="$(mktemp /tmp/foundry-orchestrator-response.XXXXXX.json)"
-http_code="$(
-  curl -sS -o "${resp_file}" -w "%{http_code}" \
-    -X PUT \
-    -H "Authorization: Bearer ${TOKEN}" \
-    -H "Content-Type: application/json" \
-    "${PROJECT_ENDPOINT}/agents/${AGENT_NAME}?api-version=${API_VERSION}" \
-    --data @"${tmp_payload}"
-)"
+if [[ -n "${existing_id}" ]]; then
+  http_code="$(
+    curl -sS -o "${resp_file}" -w "%{http_code}" \
+      -X POST \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Content-Type: application/json" \
+      "${PROJECT_ENDPOINT}/assistants/${existing_id}?api-version=${API_VERSION}" \
+      --data @"${tmp_payload}"
+  )"
+else
+  http_code="$(
+    curl -sS -o "${resp_file}" -w "%{http_code}" \
+      -X POST \
+      -H "Authorization: Bearer ${TOKEN}" \
+      -H "Content-Type: application/json" \
+      "${PROJECT_ENDPOINT}/assistants?api-version=${API_VERSION}" \
+      --data @"${tmp_payload}"
+  )"
+fi
 
 if [[ "${http_code}" != "200" && "${http_code}" != "201" ]]; then
   echo "Foundry API call failed (HTTP ${http_code}):"
@@ -130,5 +339,5 @@ if [[ "${http_code}" != "200" && "${http_code}" != "201" ]]; then
 fi
 
 echo "Success (HTTP ${http_code})."
-jq '{name, id, version, latest: .definition.tools}' "${resp_file}" || true
+jq '{name, id, model, tools: .tools}' "${resp_file}" || true
 rm -f "${resp_file}"

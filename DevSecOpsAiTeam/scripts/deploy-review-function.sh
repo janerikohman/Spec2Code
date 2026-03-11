@@ -35,12 +35,15 @@ BITBUCKET_SINGLE_REPO_MODE="$(get_env BITBUCKET_SINGLE_REPO_MODE)"
 BITBUCKET_AUTO_CREATE_REPO="$(get_env BITBUCKET_AUTO_CREATE_REPO)"
 BITBUCKET_PROJECT_KEY="$(get_env BITBUCKET_PROJECT_KEY)"
 BITBUCKET_API_TOKEN_SECRET_NAME="$(get_env BITBUCKET_API_TOKEN_SECRET_NAME)"
-BITBUCKET_USERNAME_SECRET_NAME="$(get_env BITBUCKET_USERNAME_SECRET_NAME)"
-BITBUCKET_APP_PASSWORD_SECRET_NAME="$(get_env BITBUCKET_APP_PASSWORD_SECRET_NAME)"
 JIRA_BASE_URL="$(get_env JIRA_BASE_URL)"
 CONFLUENCE_SPACE_KEY="$(get_env CONFLUENCE_SPACE_KEY)"
 JIRA_EMAIL_SECRET_NAME="$(get_env JIRA_EMAIL_SECRET_NAME)"
 JIRA_API_TOKEN_SECRET_NAME="$(get_env JIRA_API_TOKEN_SECRET_NAME)"
+AI_FOUNDRY_PROJECT_ENDPOINT="$(get_env AI_FOUNDRY_PROJECT_ENDPOINT)"
+AI_FOUNDRY_API_VERSION="$(get_env AI_FOUNDRY_API_VERSION)"
+AI_FOUNDRY_LOGGING_ENABLED="$(get_env AI_FOUNDRY_LOGGING_ENABLED)"
+AI_FOUNDRY_ROLE_AGENT_MAP_JSON="$(get_env AI_FOUNDRY_ROLE_AGENT_MAP_JSON)"
+SKIP_MI_ROLE_ASSIGNMENT="$(get_env SKIP_MI_ROLE_ASSIGNMENT)"
 
 FUNCTION_APP_NAME="$(get_env REVIEW_FUNCTION_APP_NAME)"
 if [[ -z "${FUNCTION_APP_NAME}" ]]; then
@@ -57,6 +60,10 @@ RUNTIME_VERSION="3.11"
 if [[ -z "${AZURE_SUBSCRIPTION_ID}" || -z "${AZURE_RESOURCE_GROUP}" || -z "${AZURE_LOCATION}" ]]; then
   echo "Missing Azure values in .env"
   exit 1
+fi
+
+if [[ -z "${SKIP_MI_ROLE_ASSIGNMENT}" ]]; then
+  SKIP_MI_ROLE_ASSIGNMENT="true"
 fi
 
 az account set --subscription "${AZURE_SUBSCRIPTION_ID}" --only-show-errors
@@ -97,10 +104,21 @@ if [[ -n "${SERVER_FARM_ID}" ]]; then
 fi
 
 echo "Configuring remote build app settings..."
+STORAGE_CONNECTION_STRING="$(az storage account show-connection-string \
+  --name "${STORAGE_ACCOUNT_NAME}" \
+  --resource-group "${AZURE_RESOURCE_GROUP}" \
+  --query connectionString \
+  -o tsv \
+  --only-show-errors)"
+
 az functionapp config appsettings set \
   --name "${FUNCTION_APP_NAME}" \
   --resource-group "${AZURE_RESOURCE_GROUP}" \
-  --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true ENABLE_ORYX_BUILD=true \
+  --settings \
+    AzureWebJobsStorage="${STORAGE_CONNECTION_STRING}" \
+    FUNCTIONS_WORKER_RUNTIME="python" \
+    AzureWebJobsFeatureFlags="EnableWorkerIndexing" \
+    SCM_DO_BUILD_DURING_DEPLOYMENT=false \
   --only-show-errors \
   1>/tmp/review-function-appsettings.json
 
@@ -161,12 +179,6 @@ if [[ -n "${BITBUCKET_ENABLE_AUTOMATION}" || -n "${BITBUCKET_WORKSPACE}" || -n "
   if [[ -n "${AZURE_KEY_VAULT_NAME}" && -n "${BITBUCKET_API_TOKEN_SECRET_NAME}" ]]; then
     BB_TOKEN_REF="@Microsoft.KeyVault(SecretUri=https://${AZURE_KEY_VAULT_NAME}.vault.azure.net/secrets/${BITBUCKET_API_TOKEN_SECRET_NAME}/)"
     BB_SETTINGS+=("BITBUCKET_API_TOKEN=${BB_TOKEN_REF}")
-  elif [[ -n "${AZURE_KEY_VAULT_NAME}" && -n "${BITBUCKET_USERNAME_SECRET_NAME}" && -n "${BITBUCKET_APP_PASSWORD_SECRET_NAME}" ]]; then
-    # Legacy fallback for older app-password based setups.
-    BB_USER_REF="@Microsoft.KeyVault(SecretUri=https://${AZURE_KEY_VAULT_NAME}.vault.azure.net/secrets/${BITBUCKET_USERNAME_SECRET_NAME}/)"
-    BB_PASS_REF="@Microsoft.KeyVault(SecretUri=https://${AZURE_KEY_VAULT_NAME}.vault.azure.net/secrets/${BITBUCKET_APP_PASSWORD_SECRET_NAME}/)"
-    BB_SETTINGS+=("BITBUCKET_USERNAME=${BB_USER_REF}")
-    BB_SETTINGS+=("BITBUCKET_APP_PASSWORD=${BB_PASS_REF}")
   fi
 
   if [[ "${#BB_SETTINGS[@]}" -gt 0 ]]; then
@@ -190,13 +202,33 @@ if [[ -n "${JIRA_BASE_URL}" ]]; then
 
     PRINCIPAL_ID="$(az functionapp identity show --name "${FUNCTION_APP_NAME}" --resource-group "${AZURE_RESOURCE_GROUP}" --query principalId -o tsv --only-show-errors)"
     KV_SCOPE="$(az keyvault show --name "${AZURE_KEY_VAULT_NAME}" --query id -o tsv --only-show-errors)"
-    az role assignment create \
-      --assignee-object-id "${PRINCIPAL_ID}" \
-      --assignee-principal-type ServicePrincipal \
-      --role "Key Vault Secrets User" \
-      --scope "${KV_SCOPE}" \
-      --only-show-errors \
-      1>/tmp/review-function-kv-role.json || true
+    if [[ "${SKIP_MI_ROLE_ASSIGNMENT}" == "true" ]]; then
+      echo "Skipping MI role assignment step (SKIP_MI_ROLE_ASSIGNMENT=true)."
+    else
+      ROLE_ASSIGNMENT_ID="$(python3 - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)"
+      KV_SECRETS_USER_ROLE_ID="4633458b-17de-408a-b874-0445c86b69e6"
+      ROLE_DEF_ID="/subscriptions/${AZURE_SUBSCRIPTION_ID}/providers/Microsoft.Authorization/roleDefinitions/${KV_SECRETS_USER_ROLE_ID}"
+      ASSIGN_URL="https://management.azure.com${KV_SCOPE}/providers/Microsoft.Authorization/roleAssignments/${ROLE_ASSIGNMENT_ID}?api-version=2022-04-01"
+      ASSIGN_BODY="$(jq -n \
+        --arg pid "${PRINCIPAL_ID}" \
+        --arg roleDef "${ROLE_DEF_ID}" \
+        '{properties:{principalId:$pid,principalType:"ServicePrincipal",roleDefinitionId:$roleDef}}')"
+      ASSIGN_RESP="/tmp/review-function-kv-role.json"
+      if ! az rest --method put --url "${ASSIGN_URL}" --body "${ASSIGN_BODY}" --only-show-errors 1>"${ASSIGN_RESP}" 2>/tmp/review-function-kv-role.err; then
+        if grep -q "AADSTS530003" /tmp/review-function-kv-role.err; then
+          echo "WARNING: Skipping MI role assignment due tenant device policy (AADSTS530003)."
+        elif grep -qi "RoleAssignmentExists" /tmp/review-function-kv-role.err; then
+          echo "MI role assignment already exists; continuing."
+        else
+          echo "WARNING: MI role assignment failed; continuing."
+          sed -n '1,8p' /tmp/review-function-kv-role.err
+        fi
+      fi
+    fi
 
     EMAIL_REF="@Microsoft.KeyVault(SecretUri=https://${AZURE_KEY_VAULT_NAME}.vault.azure.net/secrets/${JIRA_EMAIL_SECRET_NAME}/)"
     TOKEN_REF="@Microsoft.KeyVault(SecretUri=https://${AZURE_KEY_VAULT_NAME}.vault.azure.net/secrets/${JIRA_API_TOKEN_SECRET_NAME}/)"
@@ -220,11 +252,47 @@ if [[ -n "${JIRA_BASE_URL}" ]]; then
   fi
 fi
 
-echo "Packaging function code..."
+if [[ -n "${AI_FOUNDRY_PROJECT_ENDPOINT}" || -n "${AI_FOUNDRY_LOGGING_ENABLED}" || -n "${AI_FOUNDRY_ROLE_AGENT_MAP_JSON}" || -n "${AI_FOUNDRY_API_VERSION}" ]]; then
+  echo "Configuring AI Foundry runtime logging app settings..."
+  FOUNDRY_SETTINGS=()
+  if [[ -n "${AI_FOUNDRY_PROJECT_ENDPOINT}" ]]; then
+    FOUNDRY_SETTINGS+=(AI_FOUNDRY_PROJECT_ENDPOINT="${AI_FOUNDRY_PROJECT_ENDPOINT}")
+  fi
+  if [[ -n "${AI_FOUNDRY_API_VERSION}" ]]; then
+    FOUNDRY_SETTINGS+=(AI_FOUNDRY_API_VERSION="${AI_FOUNDRY_API_VERSION}")
+  fi
+  if [[ -n "${AI_FOUNDRY_LOGGING_ENABLED}" ]]; then
+    FOUNDRY_SETTINGS+=(AI_FOUNDRY_LOGGING_ENABLED="${AI_FOUNDRY_LOGGING_ENABLED}")
+  fi
+  if [[ -n "${AI_FOUNDRY_ROLE_AGENT_MAP_JSON}" ]]; then
+    FOUNDRY_SETTINGS+=(AI_FOUNDRY_ROLE_AGENT_MAP_JSON="${AI_FOUNDRY_ROLE_AGENT_MAP_JSON}")
+  fi
+  if [[ ${#FOUNDRY_SETTINGS[@]} -gt 0 ]]; then
+    az functionapp config appsettings set \
+      --name "${FUNCTION_APP_NAME}" \
+      --resource-group "${AZURE_RESOURCE_GROUP}" \
+      --settings "${FOUNDRY_SETTINGS[@]}" \
+      --only-show-errors \
+      1>/tmp/review-function-foundry-appsettings.json
+  fi
+fi
+
+echo "Packaging function code with dependencies..."
 TMP_ZIP="/tmp/review-endpoint.zip"
 rm -f "${TMP_ZIP}"
-(cd functions/review-endpoint && zip -qr "${TMP_ZIP}" .)
 
+# Install dependencies locally for bundling
+echo "  Installing Python dependencies..."
+(
+  cd functions/review-endpoint
+  rm -rf .python_packages
+  mkdir -p .python_packages/lib/site-packages
+  python3 -m pip install -r requirements.txt --target .python_packages/lib/site-packages --upgrade --quiet
+  zip -qr "${TMP_ZIP}" .
+  rm -rf .python_packages
+)
+
+echo "Deploying function package via Kudu zipdeploy..."
 echo "Deploying function package..."
 az functionapp deployment source config-zip \
   --name "${FUNCTION_APP_NAME}" \
@@ -234,6 +302,21 @@ az functionapp deployment source config-zip \
   --only-show-errors \
   1>/tmp/review-function-deploy.json
 
+# Remove WEBSITE_RUN_FROM_PACKAGE to use extracted files instead of running from package
+echo "Removing WEBSITE_RUN_FROM_PACKAGE to enable writeable deployment..."
+az functionapp config appsettings delete \
+  --name "${FUNCTION_APP_NAME}" \
+  --resource-group "${AZURE_RESOURCE_GROUP}" \
+  --setting-names WEBSITE_RUN_FROM_PACKAGE \
+  --only-show-errors 2>/dev/null || true
+
+# Restart to pick up the change
+echo "Restarting function app..."
+az functionapp restart \
+  --name "${FUNCTION_APP_NAME}" \
+  --resource-group "${AZURE_RESOURCE_GROUP}" \
+  --only-show-errors
+
 echo "Fetching function key and URL..."
 FUNCTION_KEY="$(az functionapp keys list \
   --name "${FUNCTION_APP_NAME}" \
@@ -242,7 +325,7 @@ FUNCTION_KEY="$(az functionapp keys list \
   -o tsv \
   --only-show-errors)"
 
-FUNCTION_URL="https://${FUNCTION_APP_NAME}.azurewebsites.net/api/review_epic"
+FUNCTION_BASE_URL="https://${FUNCTION_APP_NAME}.azurewebsites.net/api"
 
 if [[ -n "${AZURE_KEY_VAULT_NAME}" ]]; then
   : "${REVIEW_ENDPOINT_API_KEY_SECRET_NAME:=review-endpoint-api-key}"
@@ -268,7 +351,7 @@ lines = env_path.read_text().splitlines()
 updates = {
     "REVIEW_FUNCTION_APP_NAME": "${FUNCTION_APP_NAME}",
     "REVIEW_FUNCTION_STORAGE_ACCOUNT": "${STORAGE_ACCOUNT_NAME}",
-    "REVIEW_ENDPOINT_URL": "${FUNCTION_URL}",
+    "REVIEW_ENDPOINT_BASE_URL": "${FUNCTION_BASE_URL}",
     "REVIEW_ENDPOINT_API_KEY_SECRET_NAME": "${REVIEW_ENDPOINT_API_KEY_SECRET_NAME}",
     "REVIEW_ENDPOINT_API_KEY": "${ENV_FUNCTION_KEY}",
 }
@@ -289,7 +372,7 @@ env_path.write_text("\\n".join(out) + "\\n")
 PY
 
 echo "Done."
-echo "REVIEW_ENDPOINT_URL=${FUNCTION_URL}"
+echo "REVIEW_ENDPOINT_BASE_URL=${FUNCTION_BASE_URL}"
 if [[ -n "${AZURE_KEY_VAULT_NAME}" ]]; then
   echo "REVIEW_ENDPOINT_API_KEY stored in Key Vault secret ${REVIEW_ENDPOINT_API_KEY_SECRET_NAME}"
 else
