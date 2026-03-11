@@ -170,7 +170,7 @@ Recommended alert conditions:
 
 ### Query JQL
 ```
-project = KAN AND type = Epic AND status IN ("New", "Ready for Orchestration", "READY_FOR_ORCHESTRATION")
+project = KAN AND type = Epic AND status IN ("To Do", "New", "Ready for Orchestration", "READY_FOR_ORCHESTRATION")
 ```
 
 ### Deduplication

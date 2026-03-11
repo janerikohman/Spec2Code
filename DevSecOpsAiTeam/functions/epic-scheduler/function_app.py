@@ -39,6 +39,8 @@ logger = logging.getLogger("epic-scheduler")
 
 # ==================== CONSTANTS ====================
 READY_STATES = [
+    "To Do",
+    "TO DO",
     "New",
     "Ready for Orchestration",
     "READY_FOR_ORCHESTRATION",
