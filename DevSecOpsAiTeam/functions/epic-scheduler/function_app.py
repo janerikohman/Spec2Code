@@ -61,17 +61,30 @@ def get_jira_client() -> Any:
     Raises:
         ValueError: If credentials are not configured
     """
-    if JIRA is None:
-        raise ImportError("jira dependency is not available in the function runtime")
-
     if not JIRA_EMAIL or not JIRA_API_TOKEN:
         raise ValueError("JIRA_EMAIL and JIRA_API_TOKEN must be configured")
+
+    if JIRA is None:
+        logger.warning("jira dependency is not available in runtime, using Jira REST fallback")
+        return None
     
     return JIRA(
         server=JIRA_BASE_URL,
         basic_auth=(JIRA_EMAIL, JIRA_API_TOKEN),
         options={"agile_rest_path": "agile/1.0"}
     )
+
+
+def _jira_auth_headers() -> Dict[str, str]:
+    """Build Basic Auth headers for Jira REST API fallback."""
+    import base64
+
+    token = base64.b64encode(f"{JIRA_EMAIL}:{JIRA_API_TOKEN}".encode()).decode()
+    return {
+        "Authorization": f"Basic {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
 
 
 # ==================== JIRA QUERIES ====================
@@ -93,6 +106,22 @@ def query_pending_epics(jira_client: Any) -> List[str]:
     """
     
     try:
+        if jira_client is None:
+            if requests is None:
+                raise RuntimeError("requests dependency is not available in the function runtime")
+
+            response = requests.get(
+                f"{JIRA_BASE_URL}/rest/api/3/search",
+                headers=_jira_auth_headers(),
+                params={"jql": jql, "maxResults": 100, "fields": "key"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            issues = response.json().get("issues", [])
+            epic_keys = [issue.get("key") for issue in issues if issue.get("key")]
+            logger.info(f"Found {len(epic_keys)} pending epics via REST: {epic_keys}")
+            return epic_keys
+
         issues = jira_client.search_issues(jql, maxResults=100)
         epic_keys = [issue.key for issue in issues]
         logger.info(f"Found {len(epic_keys)} pending epics: {epic_keys}")
@@ -119,6 +148,45 @@ def get_recent_orchestration_comment(
         Comment ID if found, None otherwise
     """
     try:
+        if jira_client is None:
+            if requests is None:
+                return None
+
+            response = requests.get(
+                f"{JIRA_BASE_URL}/rest/api/3/issue/{epic_key}/comment",
+                headers=_jira_auth_headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            comments = response.json().get("comments", [])
+            cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
+
+            for comment in comments:
+                comment_created_raw = comment.get("created", "")
+                if not comment_created_raw:
+                    continue
+                comment_created = datetime.fromisoformat(comment_created_raw.replace('Z', '+00:00')).replace(tzinfo=None)
+                if comment_created <= cutoff_time:
+                    continue
+
+                body = comment.get("body")
+                if isinstance(body, str):
+                    text = body
+                else:
+                    parts: List[str] = []
+                    for block in body.get("content", []) if isinstance(body, dict) else []:
+                        for node in block.get("content", []):
+                            if isinstance(node, dict) and "text" in node:
+                                parts.append(node["text"])
+                    text = " ".join(parts)
+
+                if "Orchestration triggered" in text or "ORCHESTRATION_TRIGGERED" in text:
+                    comment_id = str(comment.get("id", ""))
+                    logger.info(f"Found recent orchestration comment on {epic_key} via REST")
+                    return comment_id or None
+
+            return None
+
         issue = jira_client.issue(epic_key, expand="changelog")
         cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
         
@@ -136,6 +204,28 @@ def get_recent_orchestration_comment(
     except JIRAError as e:
         logger.warning(f"Failed to get comments for {epic_key}: {e}")
         return None
+    except Exception as e:
+        logger.warning(f"Failed to get comments for {epic_key} via REST: {e}")
+        return None
+
+
+def add_orchestration_comment(jira_client: Any, epic_key: str, comment: str) -> None:
+    """Add scheduler marker comment using jira SDK or REST fallback."""
+    if jira_client is not None:
+        jira_client.add_comment(epic_key, comment)
+        return
+
+    if requests is None:
+        raise RuntimeError("requests dependency is not available in the function runtime")
+
+    payload = {"body": comment}
+    response = requests.post(
+        f"{JIRA_BASE_URL}/rest/api/2/issue/{epic_key}/comment",
+        headers=_jira_auth_headers(),
+        json=payload,
+        timeout=30,
+    )
+    response.raise_for_status()
 
 
 # ==================== ORCHESTRATION TRIGGER ====================
@@ -239,7 +329,8 @@ def run_scheduler_cycle() -> Dict[str, int]:
                 if success:
                     # Add comment to Jira to mark orchestration triggered
                     try:
-                        jira_client.add_comment(
+                        add_orchestration_comment(
+                            jira_client,
                             epic_key,
                             f"[AUTOMATED] Orchestration triggered by epic-scheduler at {datetime.utcnow().isoformat()}Z"
                         )
