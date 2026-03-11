@@ -112,6 +112,23 @@ Purpose: prevent repeat troubleshooting loops by capturing resolved blockers and
   - Runtime should use the same `email + API token` pair for issue read, comment, and Confluence write paths.
 - Owner: coordinator runtime / platform auth
 
+## 2026-03-11 - execute_orchestrator_cycle failed: coordinator response not JSON
+
+- Date: 2026-03-11
+- Area: Deployed function path (scheduler → execute_orchestrator_cycle)
+- Symptom: Scheduler and Jira webhook triggers failed silently. Direct test scripts (`test_full_orchestration.py`) worked fine.
+- Root cause: `_parse_agent_response()` in `foundry_agents.py` called `json.loads()` on the coordinator response and raised `ValueError` on non-JSON. The coordinator agent returns markdown/text, not JSON. `orchestrate_epic()` in `coordinator_agent.py` then raised `RuntimeError("Coordinator output missing delivery_package")`. The test scripts bypass this entire path and call Foundry SDK directly.
+- Preferred fix path:
+  1. Change `_parse_agent_response` to wrap non-JSON responses as `{"outcome": "completed", "raw_response": text}` instead of raising.
+  2. Change `orchestrate_epic` to build a minimal `delivery_package` from `raw_response` instead of raising when `delivery_package` key is absent.
+- Anti-patterns to avoid:
+  - Assuming LLM agent responses will always be valid JSON — agents produce markdown unless the system prompt strictly enforces JSON output.
+  - Testing only via direct Foundry SDK scripts without also testing through the deployed function endpoint.
+- Verification:
+  - `POST /api/execute_orchestrator_cycle {"epic_key":"KAN-148"}` returns `{"status": "COMPLETED", ...}` or fails with a transient quota error (not a code error).
+  - Guardrail checks: both pass after fix.
+- Owner: function runtime / delivery automation
+
 ## 2026-03-11 - Confluence space must exist before agents publish artifacts
 
 - Date: 2026-03-11

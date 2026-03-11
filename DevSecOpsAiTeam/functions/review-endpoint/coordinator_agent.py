@@ -74,9 +74,19 @@ class CoordinatorAgent:
                 timeout_seconds=600,
             )
 
+            # Coordinator may return a structured delivery_package dict, or a
+            # natural-language raw_response (text/markdown). Both are valid.
             delivery_package = coordinator_output.get("delivery_package")
             if not isinstance(delivery_package, dict):
-                raise RuntimeError("Coordinator output missing delivery_package")
+                # Build a minimal delivery_package from whatever the coordinator returned.
+                logger.info(
+                    "Coordinator did not return delivery_package dict; "
+                    "building minimal package from coordinator output."
+                )
+                delivery_package = {
+                    "raw_response": coordinator_output.get("raw_response", ""),
+                    "coordinator_outcome": coordinator_output.get("outcome", "completed"),
+                }
 
             delivery_package.setdefault("epic_key", epic_key)
             delivery_package.setdefault("orchestration_id", self.orchestration_id)
