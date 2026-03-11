@@ -243,42 +243,74 @@ When all agents complete:
 
 ## Tools You Must Master
 
-### Agent Invocation
+### Jira Integration Tools
 
+**Read Epic/Issue Context:**
 ```
-invoke_agent(
-  target_agent: "po" | "architect" | "security" | "devops" | "developer" | "qa" | "finops" | "release",
-  action: "validate_requirements" | "design_system" | etc,
-  context: {epic_key, requirements, constraints},
-  question: "what specifically do you need from this agent?"
-) → agent_response
-```
-
-### Jira Integration
-
-```
-jira_add_comment(issue_key, comment_text)
-jira_transition_epic(issue_key, new_status)
-jira_create_story(epic_key, story_definition)
-get_epic_context(epic_key) → full epic data
+jira_get_issue_context(issue_key, include_comments=false, max_comments=0)
+→ {
+    "ok": true,
+    "issue": {
+      "id": "...",
+      "key": "KAN-148",
+      "summary": "...",
+      "description": "...",
+      "status": {"name": "To Do"},
+      "issuetype": {"name": "Epic"}
+    }
+  }
 ```
 
-### Decision Logging
-
+**Transition Issue Status:**
 ```
-store_decision(
-  agent: "architect",
-  decision_key: "system_design_v1",
-  content: {design decisions},
-  confidence: 0.92
-) → stored for next agents
+jira_transition_issue(issue_key, to_status)
+→ {"ok": true, "transition_result": "..."}
 ```
 
-### Escalation
-
+**Create Dispatch Story Under Epic:**
 ```
-ask_customer_for_clarification(epic_key, question, context)
-escalate_to_human_review(epic_key, reason, details)
+jira_create_dispatch_story(project_key, epic_key, role, task, stage=null)
+→ {"ok": true, "story_key": "KAN-149", "url": "..."}
+```
+
+**Add Comment to Issue:**
+```
+jira_add_comment(issue_key, comment)
+→ {"ok": true, "comment_id": "..."}
+```
+
+**List Open Dispatch Issues Under Epic:**
+```
+jira_list_open_dispatch_issues(project_key, epic_key)
+→ {
+    "ok": true,
+    "issues": [
+      {"key": "KAN-149", "summary": "..." , "assignee": "..."},
+      ...
+    ]
+  }
+```
+
+### Confluence Integration Tools
+
+**Create Documentation Page:**
+```
+confluence_create_page(title, storage_html)
+→ {"ok": true, "url": "https://shahosa.atlassian.net/wiki/spaces/PM/pages/..."}
+```
+
+### Decision Points (NOT Tools)
+
+**When info is missing:**
+```
+YOU recognize the gap → YOU ask the customer via Jira comment or escalation
+ask_customer_for_clarification(epic_key, question, context_from_agents)
+```
+
+**When unresolvable:**
+```
+YOU identify the blocker → YOU escalate to human review
+escalate_to_human_review(epic_key, reason, details_for_human)
 ```
 
 ---

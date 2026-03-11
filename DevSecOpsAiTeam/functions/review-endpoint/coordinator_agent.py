@@ -26,6 +26,17 @@ logger = logging.getLogger("CoordinatorAgent")
 JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "")
 CONFLUENCE_BASE_URL = os.environ.get("CONFLUENCE_BASE_URL", "")
 CONFLUENCE_SPACE_KEY = os.environ.get("CONFLUENCE_SPACE_KEY", "")
+JIRA_EMAIL_ENV = os.environ.get("JIRA_EMAIL", "")
+JIRA_API_TOKEN_ENV = os.environ.get("JIRA_API_TOKEN", "")
+
+
+def _usable_secret_value(value: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("@Microsoft.KeyVault("):
+        return ""
+    return candidate
 
 
 class CoordinatorAgent:
@@ -147,8 +158,8 @@ You must return valid JSON and include:
         # RULE_16: Jira and Confluence share the same email + API token.
         if not JIRA_BASE_URL:
             raise RuntimeError("JIRA_BASE_URL application setting is missing")
-        _email = jira_email()
-        _token = jira_api_token()
+        _email = _usable_secret_value(JIRA_EMAIL_ENV) or jira_email()
+        _token = _usable_secret_value(JIRA_API_TOKEN_ENV) or jira_api_token()
         encoded = base64.b64encode(f"{_email}:{_token}".encode("utf-8")).decode("utf-8")
         return {
             "Authorization": f"Basic {encoded}",
@@ -161,8 +172,8 @@ You must return valid JSON and include:
         # RULE_16: Confluence uses the SAME email + API token as Jira.
         if not CONFLUENCE_BASE_URL:
             raise RuntimeError("CONFLUENCE_BASE_URL application setting is missing")
-        _email = jira_email()
-        _token = jira_api_token()
+        _email = _usable_secret_value(JIRA_EMAIL_ENV) or jira_email()
+        _token = _usable_secret_value(JIRA_API_TOKEN_ENV) or jira_api_token()
         encoded = base64.b64encode(f"{_email}:{_token}".encode("utf-8")).decode("utf-8")
         return {
             "Authorization": f"Basic {encoded}",

@@ -1,67 +1,96 @@
-# Spec2Code - 100% Agentic Orchestration (v2.0)
+# Spec2Code — Agentic DevSecOps Delivery (v2.0)
 
-Epic-delivery workflow for Jira using **100% Agentic Architecture**:
-- **AI Foundry**: Coordinator Agent (master orchestrator) + 8 role agents (autonomous, peer-to-peer collaboration)
-- **Azure Function**: Minimal webhook receiver only (100 lines)
-- **Jira**: Event-driven ingress and delivery tracking
+Automated epic-delivery pipeline using **100% Agentic Architecture** on Azure AI Foundry.
+
+| Component | Resource | Status |
+|-----------|----------|--------|
+| Coordinator Agent | `asst_7J7tf7yRPJRdQcBvo0TIrNi2` | ✅ Live |
+| 8 Specialist Agents | see `.env` `AI_FOUNDRY_ROLE_AGENT_MAP_JSON` | ✅ 8/8 PASS |
+| Tool Adapter (Function) | `epicreview257529268.azurewebsites.net` | ✅ Running |
+| Epic Scheduler | `epic-scheduler-agentic` | ✅ Running (every 5 min) |
+| Key Vault | `kv-epic-po-2787129` | ✅ Active |
+| Confluence space | `S2C` — shahosa.atlassian.net/wiki/spaces/S2C | ✅ Created |
+| Jira project | `KAN` — shahosa.atlassian.net | ✅ Active |
+| Bitbucket workspace | `shahosa` | ✅ Active |
+
+---
 
 ## Repository Structure
 
-### Core Agents (v2.0 - 100% Agentic)
+### Agents
 
-- **`agents/coordinator-agent/`**
-  - Master orchestrator instructions (450+ lines)
-  - Responsible for epic orchestration, intelligent sequencing, feedback loops, gate verification
-  - Runs in Azure AI Foundry
+- **`agents/coordinator-agent/`** — Master orchestrator: sequences specialist roles, gates, dispatches stories
+- **`agents/*-agent/`** — 8 specialist roles, each with advisory-mode Confluence publishing:
+  - `po-requirements-agent/` — Requirements analysis
+  - `architect-agent/` — Architecture & ADR
+  - `security-architect-agent/` — Threat model & security posture
+  - `devops-iac-agent/` — IaC, pipelines, cost optimisation
+  - `developer-agent/` — Implementation planning
+  - `tester-qa-agent/` — Test strategy & quality gates
+  - `finops-agent/` — Cost estimates & FinOps analysis
+  - `release-manager-agent/` — Release plan & runbook
+- **`agents/shared/`** — Agent communication protocol, epic state machine, evidence requirements
 
-- **`agents/*-agent/`** (8 specialized agents)
-  - `po-requirements-agent/` - Product Owner requirements gathering
-  - `architect-agent/` - Architecture & design decisions
-  - `security-architect-agent/` - Security posture & threat modeling
-  - `devops-iac-agent/` - Infrastructure automation & cost optimization
-  - `developer-agent/` - Implementation planning
-  - `tester-qa-agent/` - Quality assurance & testability
-  - `finops-agent/` - Cost optimization & budget tracking
-  - `release-manager-agent/` - Release coordination & delivery verification
-  
-  All agents support:
-  - Peer-to-peer communication via `invoke_agent()` tool
-  - Confidence scoring (0.0-1.0) with feedback loops
-  - Mandatory DoR gate verification per phase
-  - Automatic Jira/Confluence integration
+> **Advisory-mode rule**: agents only call `confluence_create_page` when explicitly asked, never on review-only prompts.
 
-### Infrastructure & Configuration
+### Functions (Azure)
 
-- **`functions/review-endpoint/`**
-  - `function_app.py` - Minimal webhook (100 lines) - delegates to Coordinator Agent
-  - `coordinator_agent.py` - Orchestration engine (900 lines, fully implemented)
-  - `requirements.txt` - Python dependencies
+- **`functions/review-endpoint/`** — Tool adapter (`function_app.py`). Exposes:
+  - `POST /api/tool/jira/get_issue_context`
+  - `POST /api/tool/jira/add_comment`
+  - `POST /api/tool/jira/transition_issue`
+  - `POST /api/tool/jira/list_open_dispatch_issues`
+  - `POST /api/tool/jira/create_dispatch_story`
+  - `POST /api/tool/confluence/create_page`
+  - `POST /api/execute_orchestrator_cycle`
+  - `GET  /api/health`
+- **`functions/epic-scheduler/`** — Timer trigger (every 5 min): polls Jira JQL, calls `execute_orchestrator_cycle`
 
-- **`agents/shared/`**
-  - `agent-communication-protocol-v2.json` - Agent-to-agent messaging contract
-  - `epic-state-machine-v2.json` - 19-state workflow for epic delivery
-  - `evidence-requirements.md` - DoR gate definitions
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/register-foundry-role-assistants.sh` | Register / update all 9 Foundry agents |
+| `scripts/test_all_specialist_agents.py` | Smoke-test all 8 specialists (expect 8/8 PASS) |
+| `scripts/run_specialist_dispatch.py` | Dispatch all specialists on an epic + publish Confluence pages |
+| `scripts/prepare_bitbucket_epic_repo.py` | Create Bitbucket repo + push delivery pack |
+| `scripts/create_bitbucket_pr.py` | Open Bitbucket PR for epic delivery branch |
+| `scripts/post_delivery_comment.py` | Post delivery evidence comment to Jira |
+| `scripts/test_full_orchestration.py` | E2E coordinator orchestration cycle test |
+| `scripts/test-orchestrator-cycle.sh` | Manual bash orchestration trigger |
+| `scripts/deploy-review-function.sh` | Deploy review-endpoint to Azure |
+| `scripts/deploy-epic-scheduler.sh` | Deploy epic-scheduler to Azure |
+| `scripts/sync-secrets-to-keyvault.sh` | Push secrets from `.env` to Key Vault |
 
 ### Configuration
 
-- **`.env.agentic`** - Foundry agent registry, confidence thresholds, feature flags, Jira/Confluence endpoints
-- **`.env.example`** - Template for local setup
+- **`.env`** — All config: Foundry endpoints, agent IDs, Jira/Bitbucket settings, secret names
+- **`templates/shopping-list-delivery-pack/`** — Delivery pack template applied to Bitbucket repos per epic
 
-### Documentation & Deployment
+---
 
-- **[DEPLOY-V2.md](DEPLOY-V2.md)** ⭐ **Deployment script → START HERE** (10 min to production)
-- `docs/`
-  - `architecture.md` - System design
-  - `operations.md` - Operational procedures
-  - `setup-vscode-foundry.md` - Foundry setup guide
-- `shared/dor/`
-  - Definition of Ready gates for each phase
+## Quick Start
 
-## 🚀 Quick Deploy
+```bash
+# 1. Copy and fill config
+cp .env.example .env   # fill JIRA_BASE_URL, AI_FOUNDRY_PROJECT_ENDPOINT, etc.
 
-1. Edit `.env.agentic` with your Foundry project ID
-2. Run commands from [DEPLOY-V2.md](DEPLOY-V2.md) (~10 minutes)
-3. Test with 3 test epics in Jira
-4. Get approval → production ready
+# 2. Sync secrets to Key Vault
+bash scripts/sync-secrets-to-keyvault.sh
 
-**Status**: Ready for immediate deployment
+# 3. Register all Foundry agents
+bash scripts/register-foundry-role-assistants.sh
+
+# 4. Verify 8/8 agents pass
+../.venv/bin/python scripts/test_all_specialist_agents.py
+
+# 5. Run e2e orchestration on an epic
+../.venv/bin/python scripts/test_full_orchestration.py
+
+# 6. Dispatch specialists + publish Confluence docs
+../.venv/bin/python scripts/run_specialist_dispatch.py --epic KAN-148
+```
+
+See [DEPLOY-V2.md](DEPLOY-V2.md) for full Azure deployment steps.
+
+**Current status**: ✅ Production — 8/8 agents live, KAN-148 delivered, Confluence S2C populated

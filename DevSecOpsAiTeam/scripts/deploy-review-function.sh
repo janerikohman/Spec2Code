@@ -103,7 +103,7 @@ if [[ -n "${SERVER_FARM_ID}" ]]; then
   fi
 fi
 
-echo "Configuring remote build app settings..."
+echo "Configuring app settings..."
 STORAGE_CONNECTION_STRING="$(az storage account show-connection-string \
   --name "${STORAGE_ACCOUNT_NAME}" \
   --resource-group "${AZURE_RESOURCE_GROUP}" \
@@ -118,7 +118,7 @@ az functionapp config appsettings set \
     AzureWebJobsStorage="${STORAGE_CONNECTION_STRING}" \
     FUNCTIONS_WORKER_RUNTIME="python" \
     AzureWebJobsFeatureFlags="EnableWorkerIndexing" \
-    SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+    WEBSITE_RUN_FROM_PACKAGE=1 \
   --only-show-errors \
   1>/tmp/review-function-appsettings.json
 
@@ -277,18 +277,38 @@ if [[ -n "${AI_FOUNDRY_PROJECT_ENDPOINT}" || -n "${AI_FOUNDRY_LOGGING_ENABLED}" 
   fi
 fi
 
-echo "Packaging function code with dependencies..."
+echo "Building Python packages locally for Linux/Python 3.11..."
+# Azure Functions expects packages at .python_packages/lib/site-packages/
+TMP_PKG_DIR="/tmp/review-endpoint-packages/lib/site-packages"
 TMP_ZIP="/tmp/review-endpoint.zip"
-rm -f "${TMP_ZIP}"
+rm -rf "/tmp/review-endpoint-packages" "${TMP_ZIP}"
+mkdir -p "${TMP_PKG_DIR}"
 
-# Install dependencies locally for bundling
-echo "  Installing Python dependencies..."
+# Install packages targeting Linux manylinux so binaries are compatible with Azure.
+# Never fall back to local host wheels (macOS), which would break in Linux runtime
+# with errors like "invalid ELF header".
+python3 -m pip install \
+  --target "${TMP_PKG_DIR}" \
+  --platform manylinux2014_x86_64 \
+  --implementation cp \
+  --python-version 3.11 \
+  --abi cp311 \
+  --only-binary=:all: \
+  --upgrade \
+  -r functions/review-endpoint/requirements.txt \
+  > /tmp/pip-install.log 2>&1 || {
+    echo "ERROR: Linux wheel install failed. Refusing to deploy non-Linux packages."
+    echo "--- pip install log (tail) ---"
+    tail -n 120 /tmp/pip-install.log || true
+    exit 1
+  }
+
+echo "Packaging function app with dependencies..."
 (
   cd functions/review-endpoint
-  rm -rf .python_packages
-  mkdir -p .python_packages/lib/site-packages
-  python3 -m pip install -r requirements.txt --target .python_packages/lib/site-packages --upgrade --quiet
-  zip -qr "${TMP_ZIP}" .
+  # Copy .python_packages/lib/site-packages/ alongside source then zip everything
+  cp -r "/tmp/review-endpoint-packages" .python_packages 2>/dev/null || true
+  zip -qr "${TMP_ZIP}" . -x '__pycache__/*' '*.pyc'
   rm -rf .python_packages
 )
 
@@ -302,15 +322,9 @@ az functionapp deployment source config-zip \
   --only-show-errors \
   1>/tmp/review-function-deploy.json
 
-# Remove WEBSITE_RUN_FROM_PACKAGE to use extracted files instead of running from package
-echo "Removing WEBSITE_RUN_FROM_PACKAGE to enable writeable deployment..."
-az functionapp config appsettings delete \
-  --name "${FUNCTION_APP_NAME}" \
-  --resource-group "${AZURE_RESOURCE_GROUP}" \
-  --setting-names WEBSITE_RUN_FROM_PACKAGE \
-  --only-show-errors 2>/dev/null || true
-
-# Restart to pick up the change
+# Keep WEBSITE_RUN_FROM_PACKAGE enabled so the Function App runs the exact
+# package that was just deployed. Removing it can leave stale extracted files
+# active and make runtime behavior diverge from the packaged source.
 echo "Restarting function app..."
 az functionapp restart \
   --name "${FUNCTION_APP_NAME}" \

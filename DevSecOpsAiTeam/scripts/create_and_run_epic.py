@@ -12,7 +12,9 @@ import requests
 RG = os.environ.get("AZURE_RESOURCE_GROUP", "")
 APP = os.environ.get("REVIEW_FUNCTION_APP_NAME", "")
 JIRA_BASE = os.environ.get("JIRA_BASE_URL", "")
-JIRA_EMAIL = os.environ.get("JIRA_EMAIL", "")
+AZURE_KEY_VAULT_NAME = os.environ.get("AZURE_KEY_VAULT_NAME", "")
+JIRA_EMAIL_SECRET_NAME = os.environ.get("JIRA_EMAIL_SECRET_NAME", "JIRA-EMAIL")
+JIRA_API_TOKEN_SECRET_NAME = os.environ.get("JIRA_API_TOKEN_SECRET_NAME", "JIRA-API-TOKEN")
 
 
 def run_az(args: list[str]) -> str:
@@ -20,24 +22,46 @@ def run_az(args: list[str]) -> str:
     return result.stdout.strip()
 
 
-def get_jira_token() -> str:
+def get_keyvault_secret(secret_name: str) -> str:
     return run_az(
         [
             "az",
-            "functionapp",
-            "config",
-            "appsettings",
-            "list",
-            "--resource-group",
-            RG,
+            "keyvault",
+            "secret",
+            "show",
+            "--vault-name",
+            AZURE_KEY_VAULT_NAME,
             "--name",
-            APP,
+            secret_name,
             "--query",
-            "[?name=='JIRA_API_TOKEN'].value | [0]",
+            "value",
             "-o",
             "tsv",
         ]
     )
+
+
+def get_jira_token() -> str:
+    return get_keyvault_secret(JIRA_API_TOKEN_SECRET_NAME)
+
+
+def get_jira_email() -> str:
+    return get_keyvault_secret(JIRA_EMAIL_SECRET_NAME)
+
+
+def validate_config() -> None:
+    missing = []
+    if not RG:
+        missing.append("AZURE_RESOURCE_GROUP")
+    if not APP:
+        missing.append("REVIEW_FUNCTION_APP_NAME")
+    if not JIRA_BASE:
+        missing.append("JIRA_BASE_URL")
+    if not AZURE_KEY_VAULT_NAME:
+        missing.append("AZURE_KEY_VAULT_NAME")
+
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 
 def get_function_key() -> str:
@@ -60,11 +84,14 @@ def get_function_key() -> str:
 
 
 def create_epic(description: str, summary: str) -> str:
+    jira_email = get_jira_email()
     token = get_jira_token()
     if not token:
-        raise RuntimeError("Missing JIRA_API_TOKEN in function app settings")
+        raise RuntimeError(f"Missing Jira token in Key Vault secret: {JIRA_API_TOKEN_SECRET_NAME}")
+    if not jira_email:
+        raise RuntimeError(f"Missing Jira email in Key Vault secret: {JIRA_EMAIL_SECRET_NAME}")
 
-    auth = base64.b64encode(f"{JIRA_EMAIL}:{token}".encode()).decode()
+    auth = base64.b64encode(f"{jira_email}:{token}".encode()).decode()
     headers = {
         "Authorization": f"Basic {auth}",
         "Accept": "application/json",
@@ -118,6 +145,7 @@ def main() -> None:
         help="Jira summary",
     )
     args = parser.parse_args()
+    validate_config()
 
     draft_text = Path(args.draft).read_text(encoding="utf-8")
 
