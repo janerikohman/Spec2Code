@@ -5,14 +5,13 @@ Queries Jira every 5 minutes for pending epics and triggers orchestration via re
 import os
 import json
 import logging
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Optional
 import azure.functions as func
-
-try:
-    import requests
-except Exception:
-    requests = None
 
 try:
     from jira import JIRA
@@ -87,6 +86,36 @@ def _jira_auth_headers() -> Dict[str, str]:
     }
 
 
+def _http_json_request(
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    timeout: int = 30,
+    params: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[int, Dict[str, Any], str]:
+    """Perform HTTP request using stdlib and return (status, json_body, raw_body)."""
+    if params:
+        query = urllib.parse.urlencode(params)
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}{query}"
+
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = response.getcode()
+            raw_body = response.read().decode("utf-8")
+            json_body = json.loads(raw_body) if raw_body else {}
+            return status, json_body, raw_body
+    except urllib.error.HTTPError as exc:
+        raw_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {raw_body}") from exc
+    except (urllib.error.URLError, socket.timeout) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 # ==================== JIRA QUERIES ====================
 def query_pending_epics(jira_client: Any) -> List[str]:
     """
@@ -107,17 +136,14 @@ def query_pending_epics(jira_client: Any) -> List[str]:
     
     try:
         if jira_client is None:
-            if requests is None:
-                raise RuntimeError("requests dependency is not available in the function runtime")
-
-            response = requests.get(
+            _, body, _ = _http_json_request(
+                "GET",
                 f"{JIRA_BASE_URL}/rest/api/3/search",
                 headers=_jira_auth_headers(),
                 params={"jql": jql, "maxResults": 100, "fields": "key"},
                 timeout=30,
             )
-            response.raise_for_status()
-            issues = response.json().get("issues", [])
+            issues = body.get("issues", [])
             epic_keys = [issue.get("key") for issue in issues if issue.get("key")]
             logger.info(f"Found {len(epic_keys)} pending epics via REST: {epic_keys}")
             return epic_keys
@@ -149,16 +175,13 @@ def get_recent_orchestration_comment(
     """
     try:
         if jira_client is None:
-            if requests is None:
-                return None
-
-            response = requests.get(
+            _, body, _ = _http_json_request(
+                "GET",
                 f"{JIRA_BASE_URL}/rest/api/3/issue/{epic_key}/comment",
                 headers=_jira_auth_headers(),
                 timeout=30,
             )
-            response.raise_for_status()
-            comments = response.json().get("comments", [])
+            comments = body.get("comments", [])
             cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
 
             for comment in comments:
@@ -215,17 +238,14 @@ def add_orchestration_comment(jira_client: Any, epic_key: str, comment: str) -> 
         jira_client.add_comment(epic_key, comment)
         return
 
-    if requests is None:
-        raise RuntimeError("requests dependency is not available in the function runtime")
-
     payload = {"body": comment}
-    response = requests.post(
+    _http_json_request(
+        "POST",
         f"{JIRA_BASE_URL}/rest/api/2/issue/{epic_key}/comment",
         headers=_jira_auth_headers(),
-        json=payload,
+        payload=payload,
         timeout=30,
     )
-    response.raise_for_status()
 
 
 # ==================== ORCHESTRATION TRIGGER ====================
@@ -239,10 +259,6 @@ def trigger_orchestration(epic_key: str) -> Tuple[bool, str]:
     Returns:
         Tuple of (success: bool, message: str)
     """
-    if requests is None:
-        logger.error("requests dependency is not available in the function runtime")
-        return False, "Missing requests dependency"
-
     if not REVIEW_ENDPOINT_BASE_URL or not REVIEW_ENDPOINT_API_KEY:
         logger.error("REVIEW_ENDPOINT_BASE_URL or REVIEW_ENDPOINT_API_KEY not configured")
         return False, "Endpoint not configured"
@@ -263,25 +279,23 @@ def trigger_orchestration(epic_key: str) -> Tuple[bool, str]:
     endpoint_url = f"{REVIEW_ENDPOINT_BASE_URL}/execute_orchestrator_cycle"
     
     try:
-        response = requests.post(
+        status_code, _, raw_body = _http_json_request(
+            "POST",
             endpoint_url,
-            json=payload,
             headers=headers,
+            payload=payload,
             timeout=30
         )
         
-        if response.status_code in [200, 202]:
+        if status_code in [200, 202]:
             logger.info(f"Successfully triggered orchestration for {epic_key}")
-            return True, f"Status {response.status_code}"
+            return True, f"Status {status_code}"
         else:
-            error_msg = f"Status {response.status_code}: {response.text}"
+            error_msg = f"Status {status_code}: {raw_body}"
             logger.error(f"Failed to trigger orchestration for {epic_key}: {error_msg}")
             return False, error_msg
-            
-    except requests.exceptions.Timeout:
-        logger.error(f"Timeout triggering orchestration for {epic_key}")
-        return False, "Timeout"
-    except requests.exceptions.RequestException as e:
+
+    except Exception as e:
         logger.error(f"Failed to trigger orchestration for {epic_key}: {e}")
         return False, str(e)
 
