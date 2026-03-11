@@ -1,0 +1,408 @@
+{
+  "protocol_version": "2.0",
+  "title": "Agent-to-Agent Communication Protocol",
+  "description": "How agents communicate, collaborate, and negotiate in 100% agentic model",
+  
+  "core_principles": {
+    "autonomy": "Agents are autonomous, not passive",
+    "collaboration": "Agents can request feedback from each other",
+    "negotiation": "Agents can propose alternatives and reach consensus",
+    "transparency": "All communication logged in Jira comments"
+  },
+
+  "agent_request": {
+    "type": "object",
+    "description": "Format when Agent A asks Agent B for something",
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "description": "Unique ID for this request (UUID)"
+      },
+      "requesting_agent": {
+        "type": "string",
+        "enum": ["po", "architect", "security", "devops", "developer", "qa", "finops", "release"],
+        "description": "Who is asking"
+      },
+      "target_agent": {
+        "type": "string",
+        "enum": ["po", "architect", "security", "devops", "developer", "qa", "finops", "release"],
+        "description": "Who is being asked"
+      },
+      "request_type": {
+        "type": "string",
+        "enum": [
+          "feedback_on_output",
+          "approval_needed",
+          "design_review",
+          "feasibility_check",
+          "cost_optimization",
+          "security_review",
+          "test_coverage_review",
+          "conflict_resolution",
+          "clarification"
+        ],
+        "description": "Type of request"
+      },
+      "epic_key": {
+        "type": "string",
+        "description": "Related epic (e.g., KAN-123)"
+      },
+      "on_artifact": {
+        "type": "object",
+        "description": "The artifact being reviewed",
+        "properties": {
+          "name": "string (name of artifact)",
+          "content": "object (the artifact itself)"
+        }
+      },
+      "specific_questions": {
+        "type": "array",
+        "description": "Specific questions to answer",
+        "items": {
+          "type": "string"
+        }
+      },
+      "constraints": {
+        "type": "object",
+        "description": "Any constraints on the response",
+        "properties": {
+          "budget_limit": "number (max cost)",
+          "deadline": "string (ISO8601)",
+          "must_avoid": "array of strings"
+        }
+      },
+      "timeline": {
+        "type": "object",
+        "properties": {
+          "requested_at": "string (ISO8601)",
+          "needed_by": "string (ISO8601)"
+        }
+      }
+    },
+    "required": ["request_id", "requesting_agent", "target_agent", "request_type", "epic_key"]
+  },
+
+  "agent_response": {
+    "type": "object",
+    "description": "Format when Agent B responds to Agent A",
+    "properties": {
+      "response_id": {
+        "type": "string",
+        "description": "Unique ID for this response (UUID)"
+      },
+      "responding_agent": {
+        "type": "string",
+        "enum": ["po", "architect", "security", "devops", "developer", "qa", "finops", "release"],
+        "description": "Who is responding"
+      },
+      "request_id": {
+        "type": "string",
+        "description": "References the original request_id"
+      },
+      "verdict": {
+        "type": "string",
+        "enum": ["approved", "approved_with_changes", "needs_revision", "blocked", "escalate"],
+        "description": "High-level verdict"
+      },
+      "confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Confidence in this assessment (0.0-1.0)"
+      },
+      "reasoning": {
+        "type": "string",
+        "description": "Why this verdict?"
+      },
+      "concerns": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "concern": "string (what's the issue)",
+            "severity": "enum [critical, high, medium, low]",
+            "impact": "string (what would happen if not addressed)"
+          }
+        },
+        "description": "Any concerns or issues found"
+      },
+      "suggestions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "suggestion": "string (what to do)",
+            "rationale": "string (why)",
+            "effort": "enum [trivial, low, medium, high]"
+          }
+        },
+        "description": "Suggestions for improvement"
+      },
+      "required_changes": {
+        "type": "array",
+        "items": "string",
+        "description": "Non-negotiable changes needed (only if verdict=needs_revision)"
+      },
+      "blocking_reason": {
+        "type": "string",
+        "description": "Why blocked? (only if verdict=blocked)"
+      },
+      "can_be_resolved_by": {
+        "type": "array",
+        "items": "string",
+        "description": "How to resolve the block"
+      },
+      "questions_for_requesting_agent": {
+        "type": "array",
+        "items": "string",
+        "description": "Follow-up questions"
+      },
+      "next_steps": {
+        "type": "array",
+        "items": "string",
+        "description": "What should happen next"
+      },
+      "timestamp": {
+        "type": "string",
+        "format": "ISO8601"
+      }
+    },
+    "required": ["response_id", "responding_agent", "request_id", "verdict", "confidence", "reasoning"]
+  },
+
+  "conflict_resolution_protocol": {
+    "description": "When two agents disagree",
+    "steps": [
+      {
+        "step": 1,
+        "action": "Identify the disagreement",
+        "example": "Architect wants microservices, DevOps wants monolith"
+      },
+      {
+        "step": 2,
+        "action": "Each agent presents position",
+        "output": [
+          "Position statement with reasoning",
+          "Pros of your approach",
+          "Cons of other approach"
+        ]
+      },
+      {
+        "step": 3,
+        "action": "Each agent evaluates other's position",
+        "questions": ["Is there merit?", "What would make it acceptable?", "Can we compromise?"]
+      },
+      {
+        "step": 4,
+        "action": "Propose compromise",
+        "format": "Both agents suggest middle ground"
+      },
+      {
+        "step": 5,
+        "action": "If no consensus: Escalate to Coordinator + human review",
+        "documentation": "Record both positions + rationales in Jira"
+      }
+    ]
+  },
+
+  "feedback_loop_protocol": {
+    "description": "When agent output confidence < 0.85",
+    "steps": [
+      {
+        "trigger": "Agent outputs confidence < 0.85",
+        "action": "Request peer feedback"
+      },
+      {
+        "step": 1,
+        "action": "Identify which agents should review",
+        "example": "Architect output → ask security + devops"
+      },
+      {
+        "step": 2,
+        "action": "Send feedback requests",
+        "format": "Use agent_request with request_type=feedback_on_output"
+      },
+      {
+        "step": 3,
+        "action": "Collect responses",
+        "timeout": "5 minutes per reviewer"
+      },
+      {
+        "step": 4,
+        "action": "Synthesize feedback",
+        "output": "Consolidated concerns + suggestions"
+      },
+      {
+        "step": 5,
+        "action": "Send back to original agent",
+        "instruction": "Please incorporate this feedback and revise"
+      },
+      {
+        "step": 6,
+        "action": "Agent revises output",
+        "expectation": "New confidence should be >= 0.90"
+      }
+    ]
+  },
+
+  "revision_request_protocol": {
+    "description": "When an agent needs to revise its own output",
+    "agent_instruction": {
+      "what": "Loop back and revise your work",
+      "based_on": "Feedback from other agents or gate failures",
+      "format": {
+        "step_1": "Acknowledge the feedback",
+        "step_2": "Identify changes needed",
+        "step_3": "Implement changes",
+        "step_4": "Re-validate confidence",
+        "step_5": "Output revised version",
+        "step_6": "Explain what changed and why"
+      }
+    }
+  },
+
+  "gate_enforcement_protocol": {
+    "description": "How gates are autonomously enforced",
+    "gate_types": [
+      {
+        "gate": "PO_REVIEW",
+        "agent": "po",
+        "criteria": [
+          "all_required_items_complete",
+          "no_unresolved_requirements",
+          "customer_contact_confirmed"
+        ],
+        "failure_handling": "Ask customer for missing info, retry"
+      },
+      {
+        "gate": "ARCHITECT_REVIEW",
+        "agent": "architect",
+        "criteria": [
+          "design_complete",
+          "confidence >= 0.85",
+          "security_feedback_incorporated"
+        ],
+        "failure_handling": "Request security review, iterate architect"
+      },
+      {
+        "gate": "SECURITY_REVIEW",
+        "agent": "security",
+        "criteria": [
+          "no_critical_violations",
+          "controls_documented",
+          "compliance_verified"
+        ],
+        "failure_handling": "Loop architect to fix violations"
+      },
+      {
+        "gate": "DEVOPS_REVIEW",
+        "agent": "devops",
+        "criteria": [
+          "infrastructure_plan_complete",
+          "cost_within_budget",
+          "deployment_strategy_defined"
+        ],
+        "failure_handling": "Request finops optimization, retry"
+      },
+      {
+        "gate": "DEVELOPER_REVIEW",
+        "agent": "developer",
+        "criteria": [
+          "implementation_feasible",
+          "effort_estimated",
+          "dependencies_resolved"
+        ],
+        "failure_handling": "Loop architect if design needs simplification"
+      },
+      {
+        "gate": "QA_REVIEW",
+        "agent": "qa",
+        "criteria": [
+          "test_coverage >= 80%",
+          "test_scenarios_complete",
+          "automation_plan_feasible"
+        ],
+        "failure_handling": "Loop developer for testability improvements"
+      },
+      {
+        "gate": "FINOPS_REVIEW",
+        "agent": "finops",
+        "criteria": [
+          "cost_optimized",
+          "budget_approved",
+          "tagging_documented"
+        ],
+        "failure_handling": "If cost too high, loop devops for optimization"
+      },
+      {
+        "gate": "RELEASE_REVIEW",
+        "agent": "release",
+        "criteria": [
+          "release_plan_ready",
+          "rollback_plan_documented",
+          "stakeholders_notified"
+        ],
+        "failure_handling": "Request clarifications, retry"
+      }
+    ]
+  },
+
+  "escalation_protocol": {
+    "description": "When agents can't reach consensus",
+    "escalation_types": [
+      {
+        "type": "CUSTOMER_CLARIFICATION_NEEDED",
+        "trigger": "Agent blocked on missing info",
+        "action": "Coordinator asks customer via Jira comment",
+        "timeout": "1 hour",
+        "if_timeout": "Proceed with assumptions + escalate"
+      },
+      {
+        "type": "AGENT_CONFLICT_UNRESOLVABLE",
+        "trigger": "Two agents disagree after 2 feedback loops",
+        "action": "Escalate to human review in Jira",
+        "documentation": "Both positions + rationales + coordinator recommendation"
+      },
+      {
+        "type": "POLICY_VIOLATION",
+        "trigger": "Agent detects compliance/policy violation",
+        "action": "Escalate to compliance officer",
+        "severity": "Critical"
+      },
+      {
+        "type": "SECURITY_CRITICAL",
+        "trigger": "Security agent finds critical issue",
+        "action": "Escalate to CISO + block epic progression",
+        "resolution": "Must be signed off by CISO"
+      },
+      {
+        "type": "BUDGET_EXCEEDED",
+        "trigger": "Cost exceeds approved budget after optimization",
+        "action": "Escalate to finance + product manager",
+        "options": ["increase budget", "descope epic", "delay timing"]
+      }
+    ]
+  },
+
+  "communication_channels": {
+    "primary": "Jira comments (all communication logged here)",
+    "secondary": "Slack notifications (async updates)",
+    "storage": "Confluence (design docs, reports)",
+    "audit": "Application Insights (detailed traces)"
+  },
+
+  "response_time_expectations": {
+    "feedback_request": "< 5 minutes",
+    "approval": "< 3 minutes",
+    "revision": "< 10 minutes",
+    "escalation": "< 2 minutes"
+  },
+
+  "success_metrics": {
+    "all_feedback_loops_resolved": true,
+    "no_unresolved_conflicts": true,
+    "all_gates_verified": true,
+    "execution_time": "< 30 minutes per epic",
+    "confidence_all_outputs": ">= 0.85"
+  }
+}

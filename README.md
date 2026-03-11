@@ -1,2 +1,7 @@
-# Spec2Code
-A learning journey into Agentic development. A multi-agent setup which transforms Epics to code.
+# Repository Layout
+
+Main project has been organized under:
+
+- `DevSecOpsAiTeam/`
+
+Start there for all code, scripts, docs, and deployment assets.

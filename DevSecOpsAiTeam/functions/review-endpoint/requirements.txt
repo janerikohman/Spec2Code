@@ -1,0 +1,8 @@
+azure-functions==1.21.3
+azure-ai-projects==2.0.0
+azure-identity>=1.15.0
+azure-keyvault-secrets>=4.8.0
+azure-core>=1.37.0
+openai>=1.40.0
+requests>=2.31.0
+pydantic>=2.5.0

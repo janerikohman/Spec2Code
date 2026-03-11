@@ -1,0 +1,340 @@
+{
+  "state_machine_version": "2.0",
+  "model": "100% Agentic",
+  "description": "Epic lifecycle state machine for autonomous agent orchestration",
+  
+  "states": {
+    "NEW": {
+      "description": "Epic just created by customer/PM",
+      "entry_requirements": [],
+      "coordinator_action": "Analyze epic characteristics",
+      "next_state": "PO_REVIEW",
+      "transition_trigger": "Epic created in Jira"
+    },
+    
+    "PO_REVIEW": {
+      "description": "PO Agent validates and normalizes requirements",
+      "agent": "po",
+      "agent_action": "validate_requirements",
+      "entry_requirements": [],
+      "exit_gates": [
+        "all_required_items_complete",
+        "no_unresolved_requirements",
+        "customer_contact_confirmed"
+      ],
+      "next_state_if_passes": "ARCHITECT_REVIEW",
+      "next_state_if_blocked": "WAITING_FOR_CLARIFICATION",
+      "confidence_minimum": 0.85
+    },
+    
+    "WAITING_FOR_CLARIFICATION": {
+      "description": "Waiting for customer to clarify requirements",
+      "triggered_by": "PO agent blocked on missing info",
+      "coordinator_action": "ask_customer_for_clarification",
+      "timeout_minutes": 60,
+      "on_customer_reply": "retry_po_agent",
+      "on_timeout": "escalate_to_product_manager",
+      "next_state": "PO_REVIEW"
+    },
+    
+    "ARCHITECT_REVIEW": {
+      "description": "Architect Agent designs system",
+      "agent": "architect",
+      "agent_action": "design_system",
+      "entry_requirements": ["po_validation_complete"],
+      "exit_gates": [
+        "design_complete",
+        "confidence >= 0.85",
+        "ready_for_security_review"
+      ],
+      "feedback_loop_agents": ["security", "devops"],
+      "next_state_if_passes": "SECURITY_REVIEW",
+      "next_state_if_needs_revision": "ARCHITECT_REVIEW_REVISION",
+      "confidence_minimum": 0.85
+    },
+    
+    "ARCHITECT_REVIEW_REVISION": {
+      "description": "Architect incorporates security/devops feedback",
+      "coordinator_action": "send_feedback_to_architect",
+      "architect_action": "incorporate_feedback_and_revise",
+      "next_state": "ARCHITECT_REVIEW",
+      "max_revision_loops": 3
+    },
+    
+    "SECURITY_REVIEW": {
+      "description": "Security Agent performs security assessment",
+      "agent": "security",
+      "agent_action": "review_design_for_security",
+      "entry_requirements": ["design_complete"],
+      "exit_gates": [
+        "no_critical_violations",
+        "controls_documented",
+        "compliance_verified"
+      ],
+      "next_state_if_passes": "DEVOPS_PLANNING",
+      "next_state_if_violations": "ARCHITECT_SECURITY_REVISION",
+      "confidence_minimum": 0.85
+    },
+    
+    "ARCHITECT_SECURITY_REVISION": {
+      "description": "Architect redesigns to address security violations",
+      "coordinator_action": "send_security_violations_to_architect",
+      "architect_action": "redesign_addressing_violations",
+      "then_security_rerevi": "security_agent_re_reviews",
+      "next_state": "SECURITY_REVIEW"
+    },
+    
+    "DEVOPS_PLANNING": {
+      "description": "DevOps Agent plans infrastructure",
+      "agent": "devops",
+      "agent_action": "plan_infrastructure_and_iac",
+      "entry_requirements": ["design_approved", "security_approved"],
+      "exit_gates": [
+        "infrastructure_plan_ready",
+        "iac_generation_complete",
+        "cost_estimate_within_budget"
+      ],
+      "feedback_loop_agents": ["finops"],
+      "next_state_if_passes": "DEVELOPER_PLANNING",
+      "next_state_if_cost_overrun": "FINOPS_OPTIMIZATION",
+      "confidence_minimum": 0.85
+    },
+    
+    "FINOPS_OPTIMIZATION": {
+      "description": "FinOps Agent optimizes infrastructure costs",
+      "agent": "finops",
+      "agent_action": "optimize_costs",
+      "coordinator_loop": "send_optimization_suggestions_to_devops",
+      "devops_action": "revise_infrastructure_with_optimizations",
+      "next_state": "DEVOPS_PLANNING"
+    },
+    
+    "DEVELOPER_PLANNING": {
+      "description": "Developer Agent creates implementation plan",
+      "agent": "developer",
+      "agent_action": "create_implementation_plan",
+      "entry_requirements": ["infrastructure_plan_ready"],
+      "exit_gates": [
+        "implementation_feasible",
+        "effort_estimated",
+        "dependencies_resolved"
+      ],
+      "feedback_loop_agents": ["qa"],
+      "next_state_if_passes": "QA_PLANNING",
+      "next_state_if_effort_overrun": "ARCHITECT_SIMPLIFICATION",
+      "confidence_minimum": 0.85
+    },
+    
+    "ARCHITECT_SIMPLIFICATION": {
+      "description": "Architect simplifies design to fit scope/timeline",
+      "coordinator_action": "ask_architect_to_simplify",
+      "architect_action": "simplify_design_based_on_effort_constraints",
+      "then_developer_recalculates": "developer_recalculates_effort",
+      "next_state": "DEVELOPER_PLANNING"
+    },
+    
+    "QA_PLANNING": {
+      "description": "QA Agent creates comprehensive test strategy",
+      "agent": "qa",
+      "agent_action": "create_test_strategy",
+      "entry_requirements": ["implementation_plan_ready"],
+      "exit_gates": [
+        "test_coverage_adequate",
+        "test_scenarios_complete",
+        "automation_plan_feasible"
+      ],
+      "feedback_loop_agents": ["developer"],
+      "next_state_if_passes": "FINOPS_FINAL_REVIEW",
+      "next_state_if_low_coverage": "DEVELOPER_TESTABILITY_IMPROVEMENT"
+    },
+    
+    "DEVELOPER_TESTABILITY_IMPROVEMENT": {
+      "description": "Developer improves design for better testability",
+      "coordinator_action": "ask_developer_to_improve_testability",
+      "developer_action": "refactor_for_testability",
+      "then_qa_recalculates": "qa_recalculates_coverage",
+      "next_state": "QA_PLANNING"
+    },
+    
+    "FINOPS_FINAL_REVIEW": {
+      "description": "FinOps Agent does final cost review and tagging",
+      "agent": "finops",
+      "agent_action": "final_cost_review_and_tagging",
+      "entry_requirements": ["qa_approval"],
+      "exit_gates": [
+        "cost_optimized",
+        "budget_approved",
+        "tagging_documented"
+      ],
+      "next_state": "RELEASE_PLANNING"
+    },
+    
+    "RELEASE_PLANNING": {
+      "description": "Release Agent prepares release and rollout plan",
+      "agent": "release",
+      "agent_action": "prepare_release_plan",
+      "entry_requirements": ["all_approvals_received"],
+      "exit_gates": [
+        "release_plan_ready",
+        "rollback_plan_documented",
+        "communications_plan_ready"
+      ],
+      "next_state": "READY_FOR_DELIVERY"
+    },
+    
+    "READY_FOR_DELIVERY": {
+      "description": "All agents approved, delivery package complete",
+      "coordinator_action": "verify_all_dor_gates",
+      "created_artifacts": [
+        "delivery_package_in_jira",
+        "implementation_story_created",
+        "design_doc_in_confluence",
+        "execution_trace_archived"
+      ],
+      "next_state": "WAITING_FOR_MANUAL_DELIVERY"
+    },
+    
+    "WAITING_FOR_MANUAL_DELIVERY": {
+      "description": "Team leads execution of implementation story",
+      "manual_action": "Team implements per generated plan",
+      "next_state": "IN_DELIVERY"
+    },
+    
+    "IN_DELIVERY": {
+      "description": "Development and QA execution phase",
+      "manual_action": "Developer and QA execute as per generated plans",
+      "next_state": "READY_FOR_RELEASE"
+    },
+    
+    "READY_FOR_RELEASE": {
+      "description": "All development and QA complete",
+      "manual_action": "Release Manager reviews readiness",
+      "next_state": "RELEASING"
+    },
+    
+    "RELEASING": {
+      "description": "In production/deployment",
+      "manual_action": "Deploy to production per release plan",
+      "next_state": "DONE"
+    },
+    
+    "DONE": {
+      "description": "Epic complete and released",
+      "final_state": true,
+      "artifacts_preserved": [
+        "delivery_package",
+        "execution_trace",
+        "implementation_stories",
+        "evidence_links"
+      ]
+    }
+  },
+
+  "state_machine_rules": {
+    "autonomous_phases": [
+      "NEW",
+      "PO_REVIEW",
+      "ARCHITECT_REVIEW",
+      "SECURITY_REVIEW",
+      "DEVOPS_PLANNING",
+      "DEVELOPER_PLANNING",
+      "QA_PLANNING",
+      "FINOPS_FINAL_REVIEW",
+      "RELEASE_PLANNING",
+      "READY_FOR_DELIVERY"
+    ],
+    "manual_phases": [
+      "WAITING_FOR_MANUAL_DELIVERY",
+      "IN_DELIVERY",
+      "READY_FOR_RELEASE",
+      "RELEASING",
+      "DONE"
+    ],
+    
+    "no_backtracking": "Cannot transition to prior state (only forward)",
+    "no_skipping_agents": "All mandatory agents for epic type must execute",
+    "all_gates_mandatory": "All DoR gates must pass before transition",
+    "customer_can_interrupt": "Customer can pause epic anytime with comment",
+    "escalation_possible": "Any agent can escalate to human review"
+  },
+
+  "feedback_loops": {
+    "architect_feedback_sources": ["security", "devops"],
+    "devops_feedback_sources": ["finops"],
+    "developer_feedback_sources": ["qa"],
+    "qa_feedback_sources": ["developer"],
+    "finops_feedback_sources": [],
+    "max_feedback_loops_per_agent": 3,
+    "min_confidence_improvement_per_loop": 0.05
+  },
+
+  "gate_enforcement": {
+    "po": {
+      "gates": [
+        "all_required_items_complete",
+        "no_unresolved_requirements",
+        "customer_contact_confirmed"
+      ]
+    },
+    "architect": {
+      "gates": [
+        "design_complete",
+        "confidence >= 0.85",
+        "security_feedback_addressed"
+      ]
+    },
+    "security": {
+      "gates": [
+        "no_critical_violations",
+        "controls_documented",
+        "compliance_verified"
+      ]
+    },
+    "devops": {
+      "gates": [
+        "infrastructure_plan_ready",
+        "iac_generation_complete",
+        "cost_acceptable"
+      ]
+    },
+    "developer": {
+      "gates": [
+        "implementation_feasible",
+        "effort_within_timeline",
+        "dependencies_resolved"
+      ]
+    },
+    "qa": {
+      "gates": [
+        "test_coverage >= 80%",
+        "test_scenarios_complete",
+        "automation_plan_feasible"
+      ]
+    },
+    "finops": {
+      "gates": [
+        "cost_optimized",
+        "budget_approved",
+        "tagging_documented"
+      ]
+    },
+    "release": {
+      "gates": [
+        "release_plan_complete",
+        "rollback_plan_documented",
+        "stakeholders_notified"
+      ]
+    }
+  },
+
+  "key_differences_from_v1": {
+    "orchestration_authority": "Function (v1) → Coordinator Agent (v2)",
+    "agent_sequencing": "Fixed hardcoded (v1) → Intelligent dynamic (v2)",
+    "feedback_loops": "Manual Function logic (v1) → Autonomous agent negotiation (v2)",
+    "gate_enforcement": "Function-driven (v1) → Agent-driven (v2)",
+    "conflict_resolution": "Not supported (v1) → Agent-negotiated (v2)",
+    "revision_handling": "Retry by Function (v1) → Agent self-correction (v2)",
+    "customer_clarification": "Function asks (v1) → Coordinator asks (v2)",
+    "scalability": "Function App limits (v1) → AI Foundry scalable (v2)"
+  }
+}
