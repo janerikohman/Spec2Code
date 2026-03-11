@@ -10,24 +10,24 @@ Version: 2.0 (100% Agentic - No Legacy Function Orchestration)
 import json
 import os
 import logging
-import importlib
-import sys
-import subprocess
+import base64
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict
 
 import azure.functions as func
+import requests
 from coordinator_agent import CoordinatorAgent
+from keyvault_secrets import jira_email, jira_api_token
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Spec2Code")
 
 try:
-    from azure.ai.projects import AIProjectClient
+    from azure.ai.agents import AgentsClient
     from azure.identity import DefaultAzureCredential
 except Exception:
-    AIProjectClient = None
+    AgentsClient = None
     DefaultAzureCredential = None
 
 AI_FOUNDRY_PROJECT_ENDPOINT = os.getenv("AI_FOUNDRY_PROJECT_ENDPOINT", "")
@@ -60,7 +60,7 @@ def resolve_foundry_project_endpoint() -> tuple[str, str]:
     return "", "UNSET"
 
 # Initialize Azure clients
-app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 foundry_client = None
 sdk_bootstrap_error = ""
@@ -69,75 +69,18 @@ foundry_endpoint_source = "UNSET"
 
 
 def ensure_foundry_sdk_available() -> bool:
-    global AIProjectClient
+    global AgentsClient
     global DefaultAzureCredential
     global sdk_bootstrap_error
 
     sdk_bootstrap_error = ""
 
-    if AIProjectClient is not None and DefaultAzureCredential is not None:
+    if AgentsClient is not None and DefaultAzureCredential is not None:
         return True
 
-    runtime_site_packages = "/tmp/spec2code_site_packages"
-    if runtime_site_packages not in sys.path:
-        sys.path.insert(0, runtime_site_packages)
-
-    try:
-        ai_projects_module = importlib.import_module("azure.ai.projects")
-        identity_module = importlib.import_module("azure.identity")
-        AIProjectClient = getattr(ai_projects_module, "AIProjectClient", None)
-        DefaultAzureCredential = getattr(identity_module, "DefaultAzureCredential", None)
-        if AIProjectClient is not None and DefaultAzureCredential is not None:
-            logger.info("✅ Foundry SDK loaded from runtime site-packages")
-            return True
-    except Exception as import_error:
-        sdk_bootstrap_error = f"import_error: {type(import_error).__name__}: {import_error}"
-        pass
-
-    logger.warning("⚠️ Foundry SDK not available; attempting runtime install")
-    try:
-        importlib.invalidate_caches()
-        for module_name in list(sys.modules.keys()):
-            if module_name == "azure" or module_name.startswith("azure."):
-                del sys.modules[module_name]
-
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--disable-pip-version-check",
-                "--no-cache-dir",
-                "--target",
-                runtime_site_packages,
-                "azure-ai-projects==2.0.0",
-                "azure-identity>=1.15.0",
-                "azure-core>=1.37.0",
-                "openai>=1.40.0",
-            ],
-            check=True,
-            timeout=300,
-            capture_output=True,
-            text=True,
-        )
-
-        importlib.invalidate_caches()
-        ai_projects_module = importlib.import_module("azure.ai.projects")
-        identity_module = importlib.import_module("azure.identity")
-        AIProjectClient = getattr(ai_projects_module, "AIProjectClient", None)
-        DefaultAzureCredential = getattr(identity_module, "DefaultAzureCredential", None)
-
-        if AIProjectClient is not None and DefaultAzureCredential is not None:
-            logger.info("✅ Foundry SDK installed and loaded at runtime")
-            return True
-
-        logger.error("❌ Runtime install completed but SDK still unavailable")
-        return False
-    except Exception as install_error:
-        sdk_bootstrap_error = f"install_error: {type(install_error).__name__}: {install_error}"
-        logger.error(f"❌ Runtime SDK install failed: {type(install_error).__name__}: {install_error}")
-        return False
+    sdk_bootstrap_error = "import_error: azure-ai-agents or azure-identity unavailable"
+    logger.error("❌ Required Foundry SDK packages are not importable at startup")
+    return False
 
 
 def get_foundry_client() -> Any:
@@ -150,13 +93,13 @@ def get_foundry_client() -> Any:
     foundry_client_init_error = ""
 
     if not ensure_foundry_sdk_available():
-        logger.error("❌ Unable to load Azure AI Projects SDK")
+        logger.error("❌ Unable to load Azure AI Agents SDK")
         foundry_client_init_error = sdk_bootstrap_error or "sdk_bootstrap_failed"
         return None
 
-    if AIProjectClient is None or DefaultAzureCredential is None:
-        logger.error("❌ Azure AI Projects SDK not available")
-        foundry_client_init_error = "azure_ai_projects_sdk_unavailable"
+    if AgentsClient is None or DefaultAzureCredential is None:
+        logger.error("❌ Azure AI Agents SDK not available")
+        foundry_client_init_error = "azure_ai_agents_sdk_unavailable"
         return None
 
     resolved_endpoint, endpoint_source = resolve_foundry_project_endpoint()
@@ -170,7 +113,7 @@ def get_foundry_client() -> Any:
     try:
         logger.info(f"🔄 Initializing AI Foundry client with endpoint: {resolved_endpoint} (source={endpoint_source})")
         credential = DefaultAzureCredential()
-        foundry_client = AIProjectClient(
+        foundry_client = AgentsClient(
             endpoint=resolved_endpoint,
             credential=credential
         )
@@ -299,7 +242,7 @@ def debug_info(req: func.HttpRequest) -> func.HttpResponse:
         "timestamp": datetime.utcnow().isoformat(),
         "python_version": sys.version,
         "python_path": sys.executable,
-        "ai_projects_available": AIProjectClient is not None,
+        "ai_agents_available": AgentsClient is not None,
         "credential_available": DefaultAzureCredential is not None,
         "endpoint_configured": bool(resolve_foundry_project_endpoint()[0]),
         "endpoint_value": resolve_foundry_project_endpoint()[0] if resolve_foundry_project_endpoint()[0] else "NOT SET",
@@ -322,9 +265,9 @@ def debug_info(req: func.HttpRequest) -> func.HttpResponse:
     if not foundry_client:
         try:
             resolved_endpoint, _ = resolve_foundry_project_endpoint()
-            if AIProjectClient and DefaultAzureCredential and resolved_endpoint:
+            if AgentsClient and DefaultAzureCredential and resolved_endpoint:
                 test_cred = DefaultAzureCredential()
-                test_client = AIProjectClient(
+                test_client = AgentsClient(
                     endpoint=resolved_endpoint,
                     credential=test_cred
                 )
@@ -332,6 +275,37 @@ def debug_info(req: func.HttpRequest) -> func.HttpResponse:
         except Exception as e:
             info["initialization_test"] = "FAILED"
             info["initialization_error"] = f"{type(e).__name__}: {str(e)}"
+
+    epic_key = (req.params.get("epic_key") or "").strip()
+    if epic_key:
+        try:
+            email = jira_email()
+            token = jira_api_token()
+            encoded = base64.b64encode(f"{email}:{token}".encode("utf-8")).decode("utf-8")
+            jira_base = os.environ.get("JIRA_BASE_URL", "")
+            probe = requests.get(
+                f"{jira_base}/rest/api/2/issue/{epic_key}",
+                headers={
+                    "Authorization": f"Basic {encoded}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                timeout=30,
+            )
+            info["jira_probe"] = {
+                "epic_key": epic_key,
+                "jira_base_url": jira_base,
+                "email_preview": f"{email[:3]}***@***" if "@" in email else "set",
+                "email_secret_name": os.environ.get("JIRA_EMAIL_SECRET_NAME", "JIRA-EMAIL"),
+                "token_secret_name": os.environ.get("JIRA_API_TOKEN_SECRET_NAME", "JIRA-API-TOKEN"),
+                "status_code": probe.status_code,
+                "response_excerpt": probe.text[:400],
+            }
+        except Exception as e:
+            info["jira_probe"] = {
+                "epic_key": epic_key,
+                "error": f"{type(e).__name__}: {str(e)}",
+            }
     
     return func.HttpResponse(
         json.dumps(info, indent=2),
@@ -368,6 +342,269 @@ def get_config(req: func.HttpRequest) -> func.HttpResponse:
         status_code=200,
         mimetype="application/json"
     )
+
+
+# ============================================================================
+# TOOL ADAPTER ENDPOINTS (used by Foundry OpenAPI tools)
+# ============================================================================
+
+def _tool_response(payload: Dict[str, Any], status_code: int = 200) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps(payload),
+        status_code=status_code,
+        mimetype="application/json",
+    )
+
+
+def _tool_error(error: str, status_code: int = 400, details: str = "") -> func.HttpResponse:
+    body: Dict[str, Any] = {"ok": False, "error": error}
+    if details:
+        body["details"] = details
+    return _tool_response(body, status_code=status_code)
+
+
+def _resolve_epic_link_field_id(headers: Dict[str, str], jira_base_url: str) -> str:
+    response = requests.get(
+        f"{jira_base_url}/rest/api/3/field",
+        headers=headers,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        return ""
+
+    for field in response.json():
+        name = (field.get("name") or "").strip().lower()
+        schema = field.get("schema") or {}
+        custom_type = (schema.get("custom") or "").lower()
+        if name == "epic link" or "epic-link" in custom_type:
+            return field.get("id") or ""
+    return ""
+
+
+@app.route(route="tool/jira/get_issue_context", methods=["POST"])
+def tool_jira_get_issue_context(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        issue_key = (payload.get("issue_key") or "").strip()
+        include_comments = bool(payload.get("include_comments", False))
+        max_comments = int(payload.get("max_comments", 10) or 10)
+
+        if not issue_key:
+            return _tool_error("issue_key is required", 400)
+
+        coordinator = CoordinatorAgent(get_foundry_client())
+        issue = coordinator._get_jira_issue_context(issue_key)
+
+        if not include_comments:
+            fields = issue.get("fields", {})
+            if isinstance(fields, dict) and isinstance(fields.get("comment"), dict):
+                fields.pop("comment", None)
+        else:
+            fields = issue.get("fields", {})
+            comment_block = fields.get("comment", {}) if isinstance(fields, dict) else {}
+            comments = comment_block.get("comments", []) if isinstance(comment_block, dict) else []
+            if isinstance(comment_block, dict):
+                comment_block["comments"] = comments[:max(1, max_comments)]
+
+        return _tool_response({"ok": True, "issue": issue})
+    except Exception as e:
+        return _tool_error("jira_get_issue_context_failed", 500, str(e))
+
+
+@app.route(route="tool/jira/add_comment", methods=["POST"])
+def tool_jira_add_comment(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        issue_key = (payload.get("issue_key") or "").strip()
+        comment = (payload.get("comment") or "").strip()
+
+        if not issue_key or not comment:
+            return _tool_error("issue_key and comment are required", 400)
+
+        coordinator = CoordinatorAgent(get_foundry_client())
+        coordinator._add_jira_comment(issue_key, comment)
+        return _tool_response({"ok": True, "issue_key": issue_key})
+    except Exception as e:
+        return _tool_error("jira_add_comment_failed", 500, str(e))
+
+
+@app.route(route="tool/jira/transition_issue", methods=["POST"])
+async def tool_jira_transition_issue(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        issue_key = (payload.get("issue_key") or "").strip()
+        to_status = (payload.get("to_status") or "").strip()
+
+        if not issue_key or not to_status:
+            return _tool_error("issue_key and to_status are required", 400)
+
+        coordinator = CoordinatorAgent(get_foundry_client())
+        await coordinator._transition_epic(issue_key, to_status)
+        return _tool_response({"ok": True, "issue_key": issue_key, "to_status": to_status})
+    except Exception as e:
+        return _tool_error("jira_transition_issue_failed", 500, str(e))
+
+
+@app.route(route="tool/jira/list_open_dispatch_issues", methods=["POST"])
+def tool_jira_list_open_dispatch_issues(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        project_key = (payload.get("project_key") or "").strip()
+        epic_key = (payload.get("epic_key") or "").strip()
+
+        if not project_key or not epic_key:
+            return _tool_error("project_key and epic_key are required", 400)
+
+        coordinator = CoordinatorAgent(get_foundry_client())
+        headers = coordinator._jira_headers()
+        jira_base_url = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
+        jql = (
+            f'project = "{project_key}" '
+            f'AND "Epic Link" = "{epic_key}" '
+            'AND statusCategory != Done '
+            'ORDER BY updated DESC'
+        )
+
+        response = requests.get(
+            f"{jira_base_url}/rest/api/3/search/jql",
+            headers=headers,
+            params={"jql": jql, "maxResults": 50, "fields": "key,status,summary,issuetype"},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            return _tool_error(
+                "jira_list_open_dispatch_issues_failed",
+                500,
+                f"{response.status_code}: {response.text[:400]}",
+            )
+
+        data = response.json()
+        issues = []
+        for issue in data.get("issues", []):
+            fields = issue.get("fields", {})
+            issues.append(
+                {
+                    "key": issue.get("key"),
+                    "summary": fields.get("summary"),
+                    "status": (fields.get("status") or {}).get("name"),
+                    "issue_type": (fields.get("issuetype") or {}).get("name"),
+                }
+            )
+
+        return _tool_response({"ok": True, "epic_key": epic_key, "issues": issues})
+    except Exception as e:
+        return _tool_error("jira_list_open_dispatch_issues_failed", 500, str(e))
+
+
+@app.route(route="tool/jira/create_dispatch_story", methods=["POST"])
+def tool_jira_create_dispatch_story(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        project_key = (payload.get("project_key") or "").strip()
+        epic_key = (payload.get("epic_key") or "").strip()
+        role = (payload.get("role") or "").strip()
+        task = (payload.get("task") or "").strip()
+        stage = (payload.get("stage") or "").strip()
+
+        if not project_key or not epic_key or not role or not task:
+            return _tool_error("project_key, epic_key, role, and task are required", 400)
+
+        coordinator = CoordinatorAgent(get_foundry_client())
+        headers = coordinator._jira_headers()
+        jira_base_url = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
+        dispatch_issue_type = os.environ.get("ORCHESTRATOR_DISPATCH_ISSUE_TYPE", "Story").strip() or "Story"
+
+        summary = f"[{role}] {task[:160]}"
+        description_lines = [
+            f"Dispatch task for role: {role}",
+            f"Epic: {epic_key}",
+            f"Stage: {stage or 'unspecified'}",
+            "",
+            task,
+        ]
+
+        # Format description in Atlassian Document Format (ADF) for Jira Cloud v3 API
+        adf_content = []
+        for line in description_lines:
+            if line.strip():
+                adf_content.append({
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": line}]
+                })
+        
+        description_adf = {
+            "version": 1,
+            "type": "doc",
+            "content": adf_content if adf_content else [{"type": "paragraph", "content": []}]
+        }
+
+        base_fields: Dict[str, Any] = {
+            "project": {"key": project_key},
+            "summary": summary,
+            "description": description_adf,
+            "issuetype": {"name": dispatch_issue_type},
+            "labels": [
+                "agent-dispatch",
+                f"role-{role.lower().replace('_', '-').replace(' ', '-')}",
+                f"epic-{epic_key.lower()}",
+            ],
+        }
+
+        attempt_payloads: List[Dict[str, Any]] = []
+
+        parent_fields = dict(base_fields)
+        parent_fields["parent"] = {"key": epic_key}
+        attempt_payloads.append({"fields": parent_fields, "link_mode": "parent"})
+
+        epic_link_field_id = _resolve_epic_link_field_id(headers, jira_base_url)
+        if epic_link_field_id:
+            epic_link_fields = dict(base_fields)
+            epic_link_fields[epic_link_field_id] = epic_key
+            attempt_payloads.append({"fields": epic_link_fields, "link_mode": f"{epic_link_field_id}"})
+
+        attempt_payloads.append({"fields": base_fields, "link_mode": "unlinked"})
+
+        last_error = ""
+        for attempt in attempt_payloads:
+            response = requests.post(
+                f"{jira_base_url}/rest/api/3/issue",
+                headers=headers,
+                json={"fields": attempt["fields"]},
+                timeout=30,
+            )
+            if response.status_code in (200, 201):
+                created = response.json()
+                return _tool_response(
+                    {
+                        "ok": True,
+                        "issue_key": created.get("key"),
+                        "issue_id": created.get("id"),
+                        "epic_key": epic_key,
+                        "link_mode": attempt["link_mode"],
+                    }
+                )
+            last_error = f"{response.status_code}: {response.text[:400]}"
+
+        return _tool_error("jira_create_dispatch_story_failed", 500, last_error)
+    except Exception as e:
+        return _tool_error("jira_create_dispatch_story_failed", 500, str(e))
+
+
+@app.route(route="tool/confluence/create_page", methods=["POST"])
+def tool_confluence_create_page(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        title = (payload.get("title") or "").strip()
+        storage_html = (payload.get("storage_html") or "").strip()
+
+        if not title or not storage_html:
+            return _tool_error("title and storage_html are required", 400)
+
+        coordinator = CoordinatorAgent(get_foundry_client())
+        page_url = coordinator._create_confluence_page(title=title, storage_html=storage_html)
+        return _tool_response({"ok": True, "url": page_url, "title": title})
+    except Exception as e:
+        return _tool_error("confluence_create_page_failed", 500, str(e))
 
 
 # Agent-core mode: orchestration intelligence lives in AI Foundry coordinator agent.

@@ -1,31 +1,34 @@
-# Review Endpoint Function
+# Review Endpoint Function — Tool Adapter
 
-HTTP-triggered Azure Function that serves as the orchestration entry point for Spec2Code.
+HTTP-triggered Azure Function (`epicreview257529268`) that serves as the **tool adapter** for all Azure AI Foundry agents.
+
+All routes use **ANONYMOUS** auth.
 
 ## Endpoints
 
-- `GET /api/health` - Health check
-- `GET /api/test` - Test endpoint  
-- `POST /api/execute_orchestrator_cycle` - Main orchestration endpoint (called by epic-scheduler)
+| Method | Route | Purpose |
+|--------|-------|---------|
+| `GET` | `/api/health` | Health check |
+| `POST` | `/api/execute_orchestrator_cycle` | Full orchestration cycle (called by epic-scheduler) |
+| `POST` | `/api/tool/jira/get_issue_context` | Read Jira epic context |
+| `POST` | `/api/tool/jira/add_comment` | Post comment to Jira issue |
+| `POST` | `/api/tool/jira/transition_issue` | Transition Jira issue status |
+| `POST` | `/api/tool/jira/list_open_dispatch_issues` | List open dispatch stories for an epic |
+| `POST` | `/api/tool/jira/create_dispatch_story` | Create a role dispatch story under an epic |
+| `POST` | `/api/tool/confluence/create_page` | Create a Confluence page in space `S2C` |
 
-## Configuration
+## Configuration (Azure Function App settings)
 
-Set these environment variables in Azure Function App settings:
+| Setting | Value / Source |
+|---------|---------------|
+| `JIRA_BASE_URL` | `https://shahosa.atlassian.net` |
+| `JIRA_EMAIL_SECRET_NAME` | `jira-email` (Key Vault secret name) |
+| `JIRA_API_TOKEN_SECRET_NAME` | `jira-api-token` (Key Vault secret name) |
+| `CONFLUENCE_BASE_URL` | `https://shahosa.atlassian.net` |
+| `CONFLUENCE_SPACE_KEY` | `S2C` |
+| `AI_FOUNDRY_PROJECT_ENDPOINT` | Foundry project endpoint URL |
+| `AZURE_KEY_VAULT_NAME` | `kv-epic-po-2787129` |
 
-- `JIRA_BASE_URL` - Base URL for Jira (e.g. `https://your-org.atlassian.net`)
-- `FOUNDRY_API_BASE` - Base URL for Foundry agents (default: https://api.microsoft.com/foundry)
-- `KEY_VAULT_URL` - Azure Key Vault URL for secrets
+## Architecture Role
 
-## Orchestration Flow
-
-1. Epic Scheduler detects new epics in Jira
-2. Calls `/api/execute_orchestrator_cycle` with epic_keys
-3. Review Endpoint coordinates 8 agents:
-   - Architect Agent
-   - Security Agent  
-   - DevOps/IaC Agent
-   - Developer Agent
-   - QA/Tester Agent
-   - FinOps Agent
-   - Release Manager Agent
-   - PO/Requirements Agent
+The Function is the **only** component that makes direct API calls to Jira, Confluence, and Bitbucket. Foundry agents call these routes as OpenAPI tools — they never call external APIs directly.

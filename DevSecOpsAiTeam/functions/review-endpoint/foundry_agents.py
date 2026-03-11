@@ -1,20 +1,16 @@
 """
-AI Foundry Agent Manager - strict agent invocation (no static fallback).
+AI Foundry Agent Manager - Handles agent discovery and invocation via Foundry agent runtime.
 
-Current SDK in this project exposes agent discovery, but not thread/run runtime APIs,
-so execution uses the Foundry OpenAI client responses endpoint while preserving
-agent-role system prompts and strict fail-fast behavior.
+Uses Azure AI Agents SDK persistent runtime APIs (threads/messages/runs) for proper
+Foundry invocation with telemetry and governance support (NOT direct OpenAI API).
 """
 
 import asyncio
 import json
 import logging
 import os
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
-from agent_prompts import ROLE_SYSTEM_PROMPTS
 
 logger = logging.getLogger("FoundryAgents")
 
@@ -29,12 +25,14 @@ class AgentConfig:
 
 
 class FoundryAgentManager:
-    """Manages AI Foundry agent discovery and strict invocation."""
+    """Manages AI Foundry agent lifecycle and invocation via persistent runtime APIs."""
 
     AGENT_CONFIGS = {
         "coordinator": AgentConfig(role="coordinator", name="Coordinator Agent"),
         "po": AgentConfig(role="po", name="Product Owner / Requirements Agent"),
-        "architect": AgentConfig(role="architect", name="Solution Architect Agent"),
+        "architect": AgentConfig(
+            role="architect", name="Solution Architect Agent"
+        ),
         "security": AgentConfig(role="security", name="Security Architect Agent"),
         "devops": AgentConfig(role="devops", name="DevOps/IaC Agent"),
         "developer": AgentConfig(role="developer", name="Developer Agent"),
@@ -47,38 +45,17 @@ class FoundryAgentManager:
         self.client = foundry_client
         self._discovered_assistants: Dict[str, str] = {}
         self._assistant_cache: Dict[str, Any] = {}
-        self._openai_client: Any = None
-        self._role_model_map = self._load_role_model_map()
-        self._last_response_request_at = 0.0
         logger.info("FoundryAgentManager initialized")
 
-    def _load_role_model_map(self) -> Dict[str, str]:
-        raw_map = os.environ.get("AI_FOUNDRY_ROLE_MODEL_MAP_JSON", "")
-        if not raw_map:
-            return {}
-        try:
-            parsed = json.loads(raw_map)
-            role_model_map: Dict[str, str] = {}
-            for raw_role_name, model_name in parsed.items():
-                short_role = self._extract_role_from_name(raw_role_name)
-                if short_role and model_name:
-                    role_model_map[short_role] = str(model_name)
-            return role_model_map
-        except Exception as map_err:
-            logger.warning(f"Could not parse AI_FOUNDRY_ROLE_MODEL_MAP_JSON: {map_err}")
-            return {}
-
-    def _get_openai_client(self) -> Any:
-        if self._openai_client is not None:
-            return self._openai_client
-        if self.client is None:
-            raise RuntimeError("AI Foundry client not initialized")
-        self._openai_client = self.client.get_openai_client()
-        return self._openai_client
+    # -------------------------------------------------------------------------
+    # Agent discovery
+    # -------------------------------------------------------------------------
 
     async def discover_agents(self) -> Dict[str, str]:
+        """Discover agents: env map first, then live API."""
         logger.info("Discovering agents in AI Foundry project...")
 
+        # Priority 1: Pre-registered agent map from environment variable
         env_map_json = os.environ.get("AI_FOUNDRY_ROLE_AGENT_MAP_JSON", "")
         if env_map_json:
             try:
@@ -88,16 +65,25 @@ class FoundryAgentManager:
                     short_role = self._extract_role_from_name(raw_role_name)
                     if short_role:
                         discovered[short_role] = assistant_id
+                        logger.info(
+                            f"Loaded {short_role} -> {assistant_id} "
+                            f"(from env map key: {raw_role_name})"
+                        )
                 if discovered:
                     self._discovered_assistants = discovered
-                    logger.info(f"Loaded {len(discovered)} role mappings from env")
+                    logger.info(
+                        f"{len(discovered)} agents loaded from AI_FOUNDRY_ROLE_AGENT_MAP_JSON"
+                    )
                     return discovered
             except Exception as env_err:
-                logger.warning(f"Could not parse AI_FOUNDRY_ROLE_AGENT_MAP_JSON: {env_err}")
+                logger.warning(
+                    f"Could not parse AI_FOUNDRY_ROLE_AGENT_MAP_JSON: {env_err}"
+                )
 
+        # Priority 2: Live API discovery
         try:
             discovered = {}
-            assistants = self.client.agents.list()
+            assistants = self.client.list_agents()
             for assistant in assistants:
                 role = self._extract_role_from_assistant(assistant)
                 if role:
@@ -106,17 +92,36 @@ class FoundryAgentManager:
                         "name": getattr(assistant, "name", "unknown"),
                         "model": getattr(assistant, "model", "unknown"),
                     }
+                    logger.info(
+                        f"Found {role} agent via live discovery: {assistant.id}"
+                    )
+
             self._discovered_assistants = discovered
+            if discovered:
+                logger.info(f"Discovered {len(discovered)} agents via live API")
+            else:
+                logger.warning("No agents discovered via live API")
             return discovered
         except Exception as e:
             logger.error(f"Agent discovery failed: {e}", exc_info=True)
             return {}
 
     def _extract_role_from_name(self, name: str) -> Optional[str]:
+        """Map raw agent name to canonical short role key.
+
+        NOTE: 'security' must precede 'architect' so that 'security-architect'
+        maps to 'security', not 'architect'.
+        """
         name_lower = name.lower()
         role_patterns = {
             "coordinator": ["coordinator", "orchestrator"],
-            "po": ["po-requirements", "po_requirements", "product owner", "requirements", "po"],
+            "po": [
+                "po-requirements",
+                "po_requirements",
+                "product owner",
+                "requirements",
+                "po",
+            ],
             "security": ["security"],
             "architect": ["architect"],
             "devops": ["devops"],
@@ -126,23 +131,20 @@ class FoundryAgentManager:
             "release": ["release"],
         }
         for role, patterns in role_patterns.items():
-            if any(pattern in name_lower or name_lower == pattern for pattern in patterns):
-                return role
+            for pattern in patterns:
+                if pattern in name_lower or name_lower == pattern:
+                    return role
         return None
 
     def _extract_role_from_assistant(self, assistant: Any) -> Optional[str]:
+        """Extract role from a live assistant object."""
         if not hasattr(assistant, "name"):
             return None
         return self._extract_role_from_name(assistant.name)
 
-    def _model_for_role(self, agent_role: str) -> str:
-        return self._role_model_map.get(
-            agent_role,
-            os.environ.get("AI_FOUNDRY_MODEL_DEPLOYMENT", "gpt-4.1-mini-agents"),
-        )
-
-    def _system_prompt_for_role(self, agent_role: str) -> Optional[str]:
-        return ROLE_SYSTEM_PROMPTS.get(agent_role)
+    # -------------------------------------------------------------------------
+    # Agent invocation
+    # -------------------------------------------------------------------------
 
     async def invoke_agent(
         self,
@@ -151,109 +153,197 @@ class FoundryAgentManager:
         context: Dict[str, Any] = None,
         timeout_seconds: int = 300,
     ) -> Dict[str, Any]:
+        """Invoke an agent by role with the given instruction.
+        
+        Uses Foundry persistent thread/run/message APIs for proper telemetry.
+        """
         logger.info(f"Invoking agent: {agent_role}")
 
-        system_prompt = self._system_prompt_for_role(agent_role)
-        if not system_prompt:
-            raise RuntimeError(f"No system prompt configured for role {agent_role}")
+        # Resolve assistant ID from discovery cache
+        assistant_id = self._discovered_assistants.get(agent_role)
 
+        # Defensive direct env-map lookup
+        if not assistant_id:
+            env_map_json = os.environ.get("AI_FOUNDRY_ROLE_AGENT_MAP_JSON", "")
+            if env_map_json:
+                try:
+                    env_map: Dict[str, str] = json.loads(env_map_json)
+                    for raw_key, aid in env_map.items():
+                        if self._extract_role_from_name(raw_key) == agent_role:
+                            assistant_id = aid
+                            logger.info(
+                                f"Resolved {agent_role} -> {assistant_id} "
+                                f"(direct env lookup)"
+                            )
+                            self._discovered_assistants[agent_role] = assistant_id
+                            break
+                except Exception as lookup_err:
+                    logger.warning(
+                        f"Direct env lookup failed for {agent_role}: {lookup_err}"
+                    )
+
+        if not assistant_id:
+            raise RuntimeError(f"Agent {agent_role} not found")
+
+        # Guard: client must be initialised
         if self.client is None:
-            raise RuntimeError(f"AI Foundry client is None -- cannot invoke {agent_role}")
+            logger.error(f"AI Foundry client is None -- cannot invoke {agent_role}")
+            raise RuntimeError("AI Foundry client not initialized")
 
-        openai_client = self._get_openai_client()
-        model_name = self._model_for_role(agent_role)
+        if (
+            not hasattr(self.client, "threads")
+            or not hasattr(self.client, "runs")
+            or not hasattr(self.client, "messages")
+        ):
+            raise RuntimeError(
+                "AI Foundry persistent agent runtime client is unavailable. "
+                "Install/upgrade azure-ai-agents SDK in the function runtime."
+            )
 
-        response = await self._run_agent_with_responses(
-            openai_client=openai_client,
-            agent_role=agent_role,
-            model_name=model_name,
-            system_prompt=system_prompt,
-            instruction=instruction,
-            context=context,
-            timeout_seconds=timeout_seconds,
-        )
-        logger.info(f"{agent_role} agent completed")
-        return response
+        try:
+            # Step 1: Create thread
+            logger.info(
+                f"Creating thread for {agent_role} (assistant={assistant_id})"
+            )
+            thread = self.client.threads.create()
+            thread_id = thread.id
+            logger.info(f"Thread created: {thread_id}")
 
-    async def _run_agent_with_responses(
+            # Step 2: Run agent on thread with polling
+            response = await self._run_agent_with_polling(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                agent_role=agent_role,
+                instruction=instruction,
+                context=context,
+                timeout_seconds=timeout_seconds,
+            )
+            logger.info(f"{agent_role} agent completed")
+            return response
+
+        except asyncio.TimeoutError:
+            logger.error(f"{agent_role} agent timeout after {timeout_seconds}s")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to invoke {agent_role}: {e}", exc_info=True)
+            raise
+
+    async def _run_agent_with_polling(
         self,
-        openai_client: Any,
+        thread_id: str,
+        assistant_id: str,
         agent_role: str,
-        model_name: str,
-        system_prompt: str,
         instruction: str,
         context: Optional[Dict[str, Any]],
         timeout_seconds: int,
     ) -> Dict[str, Any]:
+        """Post message, run agent, and collect assistant output via Foundry SDK APIs."""
         message_text = self._format_agent_message(instruction, context)
-        max_attempts = 5
-        default_model_name = os.environ.get("AI_FOUNDRY_MODEL_DEPLOYMENT", "gpt-4.1-mini-agents")
-        current_model_name = model_name
+        logger.info(
+            f"Preparing to run assistant {assistant_id} on thread {thread_id}"
+        )
 
-        for attempt in range(1, max_attempts + 1):
-            try:
-                min_spacing_seconds = 2.0
-                elapsed = time.monotonic() - self._last_response_request_at
-                if elapsed < min_spacing_seconds:
-                    await asyncio.sleep(min_spacing_seconds - elapsed)
+        try:
+            logger.info(f"Adding message to thread {thread_id}")
+            self.client.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=message_text,
+            )
+            run = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.client.runs.create_and_process,
+                    thread_id=thread_id,
+                    agent_id=assistant_id,
+                ),
+                timeout=timeout_seconds,
+            )
+            run_id = getattr(run, "id", "unknown")
+            run_status = getattr(run, "status", "unknown")
+            logger.info(f"Run completed: {run_id}, status={run_status}")
+        except Exception as e:
+            logger.error(
+                f"Failed to start run for assistant {assistant_id}: "
+                f"{type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            raise
 
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        openai_client.responses.create,
-                        model=current_model_name,
-                        instructions=system_prompt,
-                        input=message_text,
-                        max_output_tokens=1800,
-                    ),
-                    timeout=timeout_seconds,
-                )
-                self._last_response_request_at = time.monotonic()
-                content = self._extract_response_text(response)
-                return self._parse_agent_response(content)
+        if run_status in ("failed", "cancelled", "expired"):
+            last_error = getattr(run, "last_error", None)
+            raise RuntimeError(f"Run {run_status}: {last_error}")
 
-            except Exception as e:
-                self._last_response_request_at = time.monotonic()
-                error_text = f"{type(e).__name__}: {e}".lower()
-                is_rate_limit = "429" in error_text or "too_many_requests" in error_text
+        if run_status != "completed":
+            raise RuntimeError(f"Run ended with unexpected status: {run_status}")
 
-                if is_rate_limit and attempt < max_attempts:
-                    if current_model_name != default_model_name:
-                        current_model_name = default_model_name
-                    await asyncio.sleep(min(30, 3 * attempt))
-                    continue
+        messages = self.client.messages.list(thread_id=thread_id)
+        for message in reversed(list(messages)):
+            if getattr(message, "role", "") == "assistant":
+                content = self._extract_assistant_message_text(message)
+                if content:
+                    logger.info(
+                        f"Agent {agent_role} response received ({len(content)} chars)"
+                    )
+                    return self._parse_agent_response(content)
 
-                raise RuntimeError(f"Agent response failed for {agent_role}: {type(e).__name__}: {e}")
+        return {
+            "outcome": "completed",
+            "confidence": 0.5,
+            "reasoning": "Agent completed but returned no message",
+        }
 
-        raise RuntimeError(f"Responses API exhausted retries for {agent_role}")
+    def _extract_assistant_message_text(self, message: Any) -> str:
+        text_chunks: List[str] = []
 
-    def _format_agent_message(self, instruction: str, context: Optional[Dict[str, Any]]) -> str:
+        direct_text = getattr(message, "text", None)
+        if isinstance(direct_text, str) and direct_text.strip():
+            text_chunks.append(direct_text)
+
+        text_messages = getattr(message, "text_messages", None)
+        if text_messages:
+            for text_message in text_messages:
+                text_obj = getattr(text_message, "text", None)
+                text_val = getattr(text_obj, "value", None)
+                if isinstance(text_val, str) and text_val.strip():
+                    text_chunks.append(text_val)
+
+        if text_chunks:
+            return "\n".join(text_chunks)
+
+        content_items = getattr(message, "content", None) or []
+        for item in content_items:
+            if isinstance(item, str) and item.strip():
+                text_chunks.append(item)
+                continue
+            item_text = getattr(item, "text", None)
+            item_value = getattr(item_text, "value", None)
+            if isinstance(item_value, str) and item_value.strip():
+                text_chunks.append(item_value)
+
+        return "\n".join(text_chunks)
+
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
+
+    def _format_agent_message(
+        self, instruction: str, context: Optional[Dict[str, Any]]
+    ) -> str:
+        """Format instruction with context."""
         message = instruction
         if context:
             message += "\n\n## Context:"
             for key, value in context.items():
                 if isinstance(value, (dict, list)):
-                    message += f"\n- {key}:\n```json\n{json.dumps(value, indent=2)}\n```"
+                    message += (
+                        f"\n- {key}:\n```json\n{json.dumps(value, indent=2)}\n```"
+                    )
                 else:
                     message += f"\n- {key}: {value}"
         return message
 
-    def _extract_response_text(self, response: Any) -> str:
-        output_text = getattr(response, "output_text", None)
-        if output_text:
-            return output_text
-
-        text_parts: List[str] = []
-        for item in getattr(response, "output", []) or []:
-            for part in getattr(item, "content", []) or []:
-                text_value = getattr(part, "text", None)
-                if isinstance(text_value, str):
-                    text_parts.append(text_value)
-                elif text_value is not None and hasattr(text_value, "value"):
-                    text_parts.append(text_value.value)
-
-        return "\n".join(part for part in text_parts if part)
-
     def _parse_agent_response(self, content: str) -> Dict[str, Any]:
+        """Parse JSON agent response; fail-fast if unparseable."""
         if not content:
             raise ValueError("Agent returned an empty response")
 

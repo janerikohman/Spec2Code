@@ -1,8 +1,15 @@
-# 🚀 Azure Simple Cleanup & Deploy
+# 🚀 Azure Deploy — Spec2Code v2.0
 
-**Approach**: Delete old → Deploy fresh v2.0  
+**Approach**: Redeploy function code → re-register agents → verify  
 **Downtime**: Acceptable  
-**Keep**: Key Vault only  
+**Keep**: Key Vault + Function App infra  
+
+**Deployed resources**:
+- Function App: `epicreview257529268` (tool adapter)
+- Epic Scheduler: `epic-scheduler-agentic`
+- Key Vault: `kv-epic-po-2787129`
+- Resource Group: `AgenticDevSecOps`
+- Region: `swedencentral`
 
 ---
 
@@ -10,9 +17,8 @@
 
 ### 1. Function App Code (Delete & Redeploy)
 ```bash
-# Get current function app name
-FUNC_NAME=<your-function-app-name>
-RG=<your-resource-group>
+FUNC_NAME=epicreview257529268
+RG=AgenticDevSecOps
 
 # Delete current deployment
 az functionapp deployment source delete \
@@ -51,11 +57,11 @@ az functionapp config appsettings list \
 
 | Resource | Name | Reason |
 |----------|------|--------|
-| **Key Vault** | `<your-key-vault-name>` | Has all secrets |
-| **Function App** | `<your-function-app-name>` | Just redeploy code |
+| **Key Vault** | `kv-epic-po-2787129` | Has all secrets |
+| **Function App** | `epicreview257529268` | Just redeploy code |
 | **App Service Plan** | `SwedenCentralLinuxDynamicPlan` | Reuse, same spec |
-| **Storage Account** | `st<your-function-app-name>` | Reuse |
-| **App Insights** | `<your-function-app-name>` | Reuse |
+| **Storage Account** | `stepicreview257529268` | Reuse |
+| **App Insights** | `epicreview257529268` | Reuse |
 
 ---
 
@@ -80,8 +86,8 @@ cd ..
 
 ### Step 2: Deploy to Azure
 ```bash
-FUNC_NAME=<your-function-app-name>
-RG=<your-resource-group>
+FUNC_NAME=epicreview257529268
+RG=AgenticDevSecOps
 
 az functionapp deployment source config-zip \
   --name $FUNC_NAME \
@@ -103,12 +109,13 @@ az functionapp config appsettings set \
   --name $FUNC_NAME \
   --resource-group $RG \
   --settings \
-    JIRA_BASE_URL="https://your-jira-instance.atlassian.net" \
-    JIRA_API_TOKEN="@Microsoft.KeyVault(SecretUri=https://<your-key-vault-name>.vault.azure.net/secrets/jira-api-token/)" \
-    CONFLUENCE_BASE_URL="https://your-jira-instance.atlassian.net/wiki" \
-    CONFLUENCE_API_TOKEN="@Microsoft.KeyVault(SecretUri=https://<your-key-vault-name>.vault.azure.net/secrets/atlassian-admin-api-token/)" \
-    FOUNDRY_PROJECT_ID="your-foundry-project-id" \
-    ORCHESTRATION_MODE="agentic-v2" \
+    JIRA_BASE_URL="https://shahosa.atlassian.net" \
+    JIRA_EMAIL_SECRET_NAME="jira-email" \
+    JIRA_API_TOKEN_SECRET_NAME="jira-api-token" \
+    CONFLUENCE_BASE_URL="https://shahosa.atlassian.net" \
+    CONFLUENCE_SPACE_KEY="S2C" \
+    AI_FOUNDRY_PROJECT_ENDPOINT="https://agenticdevsecopsteam-resource.services.ai.azure.com/api/projects/AgenticDevSecOpsTeam" \
+    AZURE_KEY_VAULT_NAME="kv-epic-po-2787129" \
     LOGLEVEL="INFO"
 ```
 
@@ -120,12 +127,10 @@ FUNC_KEY=$(az functionapp keys list \
   --resource-group $RG \
   --query 'functionKeys[0].value' -o tsv)
 
-# Test endpoint
-curl -X GET "https://$FUNC_NAME.azurewebsites.net/api/health" \
-  -H "x-functions-key: $FUNC_KEY"
+# Test endpoint (ANONYMOUS — no key required)
+curl -s https://epicreview257529268.azurewebsites.net/api/health
 
-# Expected response:
-# {"status": "healthy", "version": "2.0-agentic", ...}
+# Expected: {"status": "healthy", ...}
 ```
 
 ---
@@ -138,8 +143,8 @@ Save as `deploy-v2.sh`:
 #!/bin/bash
 set -e
 
-FUNC_NAME="<your-function-app-name>"
-RG="<your-resource-group>"
+FUNC_NAME="epicreview257529268"
+RG="AgenticDevSecOps"
 REGION="swedencentral"
 
 echo "════════════════════════════════════════"
@@ -213,15 +218,14 @@ chmod +x deploy-v2.sh
 
 ## ✅ Deployment Checklist
 
-- [ ] v2.0 code ready locally
-- [ ] `.env.agentic` configured with Foundry project ID
-- [ ] Key Vault secrets verified (Jira, Confluence tokens)
-- [ ] AI Foundry agents created (manual check)
-- [ ] Run deploy script (2 minute deployment)
-- [ ] Test health endpoint returns "healthy"
-- [ ] Create 3 test epics in Jira
-- [ ] Run orchestration tests
-- [ ] Get approval
+- [ ] `.env` configured (copy from `.env.example`)
+- [ ] Key Vault secrets verified: `jira-email`, `jira-api-token`, `bitbucket-api-token`
+- [ ] Run deploy script
+- [ ] Health endpoint returns `{"status": "healthy"}`
+- [ ] Re-register agents: `bash scripts/register-foundry-role-assistants.sh`
+- [ ] Verify agents: `../.venv/bin/python scripts/test_all_specialist_agents.py` (expect 8/8)
+- [ ] Run e2e test: `../.venv/bin/python scripts/test_full_orchestration.py`
+- [ ] Confirm Confluence space `S2C` exists at `shahosa.atlassian.net/wiki/spaces/S2C`
 
 ---
 
@@ -241,5 +245,5 @@ Then approval & go-live
 
 ---
 
-**Status**: Ready to deploy  
-**Next**: Execute deploy script above
+**Status**: ✅ Deployed and production-verified (March 11, 2026)  
+**Function URL**: `https://epicreview257529268.azurewebsites.net/api`

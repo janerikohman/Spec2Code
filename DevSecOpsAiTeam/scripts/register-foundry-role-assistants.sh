@@ -92,7 +92,7 @@ ensure_assistant() {
 
   local payload_file
   payload_file="$(mktemp -t foundry-assistant-payload).json"
-  if [[ -n "${TOOLS_SERVER_URL}" && -n "${AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID}" ]]; then
+  if [[ -n "${TOOLS_SERVER_URL}" ]]; then
     local spec_file
     spec_file="$(mktemp -t foundry-tools-spec).json"
     jq -n \
@@ -112,7 +112,6 @@ ensure_assistant() {
             post: {
               operationId: "jira_get_issue_context",
               description: "Read compact Jira issue context for an epic/story.",
-              security: [{ functionKey: [] }],
               requestBody: {
                 required: true,
                 content: {
@@ -146,7 +145,6 @@ ensure_assistant() {
             post: {
               operationId: "jira_add_comment",
               description: "Add comment to Jira issue.",
-              security: [{ functionKey: [] }],
               requestBody: {
                 required: true,
                 content: {
@@ -178,7 +176,6 @@ ensure_assistant() {
             post: {
               operationId: "jira_transition_issue",
               description: "Transition Jira issue to target status.",
-              security: [{ functionKey: [] }],
               requestBody: {
                 required: true,
                 content: {
@@ -210,7 +207,6 @@ ensure_assistant() {
             post: {
               operationId: "jira_list_open_dispatch_issues",
               description: "List open dispatch issues for an epic.",
-              security: [{ functionKey: [] }],
               requestBody: {
                 required: true,
                 content: {
@@ -238,11 +234,44 @@ ensure_assistant() {
               }
             }
           },
+          "/api/tool/jira/create_dispatch_story": {
+            post: {
+              operationId: "jira_create_dispatch_story",
+              description: "Create dispatch story under an epic.",
+              requestBody: {
+                required: true,
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["project_key", "epic_key", "role", "task"],
+                      properties: {
+                        project_key: { type: "string" },
+                        epic_key: { type: "string" },
+                        role: { type: "string" },
+                        task: { type: "string" },
+                        stage: { type: "string" }
+                      }
+                    }
+                  }
+                }
+              },
+              responses: {
+                "200": {
+                  description: "Dispatch story create result",
+                  content: {
+                    "application/json": {
+                      schema: { type: "object" }
+                    }
+                  }
+                }
+              }
+            }
+          },
           "/api/tool/confluence/create_page": {
             post: {
               operationId: "confluence_create_page",
               description: "Create Confluence page in configured space.",
-              security: [{ functionKey: [] }],
               requestBody: {
                 required: true,
                 content: {
@@ -273,22 +302,13 @@ ensure_assistant() {
           }
           | with_entries(select(.key as $k | ($allowed_paths | index($k))))
         ),
-        components: {
-          securitySchemes: {
-            functionKey: {
-              type: "apiKey",
-              in: "header",
-              name: "x-functions-key"
-            }
-          }
-        }
+        components: {}
       }' > "${spec_file}"
     jq -n \
       --arg name "${name}" \
       --arg model "${model}" \
       --rawfile instructions "${instructions_file}" \
       --slurpfile openapi_spec "${spec_file}" \
-      --arg project_connection_id "${AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID}" \
       '{
         name: $name,
         model: $model,
@@ -300,10 +320,7 @@ ensure_assistant() {
               name: "foundry_tools_api",
               description: "Execute actions against Jira/Confluence/Bitbucket through the review endpoint",
               auth: {
-                type: "connection",
-                security_scheme: {
-                  connection_id: $project_connection_id
-                }
+                type: "anonymous"
               },
               spec: $openapi_spec[0]
             }
@@ -312,7 +329,7 @@ ensure_assistant() {
       }' > "${payload_file}"
     rm -f "${spec_file}"
   else
-    echo "Error: tool registration requires TOOLS_SERVER_URL and AI_FOUNDRY_OPENAPI_PROJECT_CONNECTION_ID."
+    echo "Error: tool registration requires TOOLS_SERVER_URL."
     rm -f "${payload_file}"
     exit 1
   fi
@@ -362,7 +379,7 @@ role_allowed_paths_json() {
   local role="$1"
   case "${role}" in
     coordinator)
-      printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment","/api/tool/jira/transition_issue","/api/tool/jira/list_open_dispatch_issues","/api/tool/confluence/create_page"]'
+      printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment","/api/tool/jira/transition_issue","/api/tool/jira/list_open_dispatch_issues","/api/tool/jira/create_dispatch_story","/api/tool/confluence/create_page"]'
       ;;
     po-requirements)
       printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment"]'

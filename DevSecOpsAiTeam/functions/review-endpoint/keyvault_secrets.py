@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 _VAULT_NAME_ENV = "AZURE_KEY_VAULT_NAME"
 
 
+def _secret_name(env_var: str, default_name: str) -> str:
+    return os.environ.get(env_var, default_name).strip() or default_name
+
+
 @lru_cache(maxsize=1)
 def _client() -> SecretClient:
     """Return a cached SecretClient backed by DefaultAzureCredential.
@@ -87,7 +91,7 @@ def jira_email() -> str:
     The same address is used to authenticate both services.
     Key Vault secret name: JIRA-EMAIL
     """
-    return get_secret("JIRA-EMAIL")
+    return get_secret(_secret_name("JIRA_EMAIL_SECRET_NAME", "JIRA-EMAIL"))
 
 
 def jira_api_token() -> str:
@@ -96,7 +100,7 @@ def jira_api_token() -> str:
     The same API token authenticates both services — do not create separate tokens.
     Key Vault secret name: JIRA-API-TOKEN
     """
-    return get_secret("JIRA-API-TOKEN")
+    return get_secret(_secret_name("JIRA_API_TOKEN_SECRET_NAME", "JIRA-API-TOKEN"))
 
 
 def bitbucket_username() -> str:
@@ -105,7 +109,7 @@ def bitbucket_username() -> str:
     Distinct from Jira/Confluence credentials — never mix them.
     Key Vault secret name: BITBUCKET-USERNAME
     """
-    return get_secret("BITBUCKET-USERNAME")
+    return get_secret(_secret_name("BITBUCKET_USERNAME_SECRET_NAME", "BITBUCKET-USERNAME"))
 
 
 def bitbucket_app_password() -> str:
@@ -115,7 +119,7 @@ def bitbucket_app_password() -> str:
     Distinct from the Jira/Confluence API token.
     Key Vault secret name: BITBUCKET-APP-PASSWORD
     """
-    return get_secret("BITBUCKET-APP-PASSWORD")
+    return get_secret(_secret_name("BITBUCKET_APP_PASSWORD_SECRET_NAME", "BITBUCKET-APP-PASSWORD"))
 
 
 def bitbucket_workspace() -> str:
@@ -123,4 +127,4 @@ def bitbucket_workspace() -> str:
 
     Key Vault secret name: BITBUCKET-WORKSPACE
     """
-    return get_secret("BITBUCKET-WORKSPACE")
+    return get_secret(_secret_name("BITBUCKET_WORKSPACE_SECRET_NAME", "BITBUCKET-WORKSPACE"))
