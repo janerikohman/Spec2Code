@@ -282,7 +282,6 @@ def epic_scheduler(mytimer: func.TimerRequest) -> None:
             f"Scheduler cycle complete: "
             f"checked={results['total_checked']}, "
             f"triggered={results['triggered']}, "
-            f"skipped={results['skipped_recent']}, "
             f"errors={results['errors']}"
         )
     except Exception as e:
