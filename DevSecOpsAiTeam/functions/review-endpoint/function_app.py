@@ -428,11 +428,24 @@ def _run_whitelisted_script(action: str, epic_key: str = "") -> Dict[str, Any]:
 
     selected = allowed_actions.get(action)
     if not selected:
-        raise RuntimeError(f"Unsupported action: {action}")
+        return {
+            "ok": False,
+            "action": action,
+            "epic_key": epic_key,
+            "error": "unsupported_action",
+            "details": f"Unsupported action: {action}",
+            "available_actions": sorted(list(allowed_actions.keys())),
+        }
 
     script_path = selected["script"]
     if not Path(script_path).exists():
-        raise RuntimeError(f"Script not found: {script_path}")
+        return {
+            "ok": False,
+            "action": action,
+            "epic_key": epic_key,
+            "error": "script_not_found",
+            "details": f"Script not found: {script_path}",
+        }
 
     if selected["runner"] == "python":
         command: List[str] = ["python3", str(script_path), *selected["args"]]
@@ -459,6 +472,7 @@ def _run_whitelisted_script(action: str, epic_key: str = "") -> Dict[str, Any]:
 
 @app.route(route="tool/jira/get_issue_context", methods=["POST"])
 def tool_jira_get_issue_context(req: func.HttpRequest) -> func.HttpResponse:
+    payload: Dict[str, Any] = {}
     try:
         payload = req.get_json()
         issue_key = (payload.get("issue_key") or "").strip()
@@ -484,7 +498,15 @@ def tool_jira_get_issue_context(req: func.HttpRequest) -> func.HttpResponse:
 
         return _tool_response({"ok": True, "issue": issue})
     except Exception as e:
-        return _tool_error("jira_get_issue_context_failed", 500, str(e))
+        return _tool_response(
+            {
+                "ok": False,
+                "error": "jira_get_issue_context_failed",
+                "details": str(e),
+                "issue_key": (payload.get("issue_key") if isinstance(payload, dict) else None),
+            },
+            status_code=200,
+        )
 
 
 @app.route(route="tool/jira/add_comment", methods=["POST"])
@@ -694,12 +716,27 @@ def tool_runtime_execute_script(req: func.HttpRequest) -> func.HttpResponse:
             return _tool_error("action is required", 400)
 
         result = _run_whitelisted_script(action=action, epic_key=epic_key)
-        status_code = 200 if result.get("ok") else 500
-        return _tool_response(result, status_code=status_code)
+        # Never return 5xx for tool-level script issues; keep orchestration alive.
+        # Agent can inspect ok/error fields and decide next action.
+        return _tool_response(result, status_code=200)
     except subprocess.TimeoutExpired:
-        return _tool_error("runtime_execute_script_timeout", 500, "Script execution timed out")
+        return _tool_response(
+            {
+                "ok": False,
+                "error": "runtime_execute_script_timeout",
+                "details": "Script execution timed out",
+            },
+            status_code=200,
+        )
     except Exception as e:
-        return _tool_error("runtime_execute_script_failed", 500, str(e))
+        return _tool_response(
+            {
+                "ok": False,
+                "error": "runtime_execute_script_failed",
+                "details": str(e),
+            },
+            status_code=200,
+        )
 
 
 @app.route(route="tool/runtime/check_url", methods=["POST"])

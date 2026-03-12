@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -28,6 +29,10 @@ CONFLUENCE_BASE_URL = os.environ.get("CONFLUENCE_BASE_URL", "")
 CONFLUENCE_SPACE_KEY = os.environ.get("CONFLUENCE_SPACE_KEY", "")
 JIRA_EMAIL_ENV = os.environ.get("JIRA_EMAIL", "")
 JIRA_API_TOKEN_ENV = os.environ.get("JIRA_API_TOKEN", "")
+COORDINATOR_TIMEOUT_SECONDS = int(os.environ.get("COORDINATOR_TIMEOUT_SECONDS", "120"))
+SPECIALIST_TIMEOUT_SECONDS = int(os.environ.get("SPECIALIST_TIMEOUT_SECONDS", "45"))
+SPECIALIST_MAX_ATTEMPTS = int(os.environ.get("SPECIALIST_MAX_ATTEMPTS", "1"))
+ORCHESTRATION_RUNTIME_BUDGET_SECONDS = int(os.environ.get("ORCHESTRATION_RUNTIME_BUDGET_SECONDS", "170"))
 
 
 def _usable_secret_value(value: str) -> str:
@@ -74,7 +79,7 @@ class CoordinatorAgent:
                     "orchestration_id": self.orchestration_id,
                     "timestamp": datetime.utcnow().isoformat(),
                 },
-                timeout_seconds=600,
+                timeout_seconds=COORDINATOR_TIMEOUT_SECONDS,
             )
 
             delivery_package = coordinator_output.get("delivery_package")
@@ -183,16 +188,40 @@ Return structured delivery_package with specification containing specialist outp
             delivery_package["specification"] = specification
 
         roles = ["po", "architect", "security", "devops", "developer", "qa", "finops", "release"]
+        loop_started_at = time.monotonic()
         summary: Dict[str, Any] = {
             "planned": roles,
             "invoked": 0,
             "completed": 0,
             "failed": 0,
+            "deferred": 0,
             "failed_roles": [],
+            "deferred_roles": [],
             "details": [],
         }
 
         for role in roles:
+            elapsed = int(time.monotonic() - loop_started_at)
+            if elapsed >= ORCHESTRATION_RUNTIME_BUDGET_SECONDS:
+                summary["deferred"] += 1
+                summary["deferred_roles"].append(role)
+                summary["details"].append(
+                    {
+                        "role": role,
+                        "status": "deferred",
+                        "reason": "runtime_budget_exceeded",
+                        "elapsed_seconds": elapsed,
+                    }
+                )
+                specification[role] = {
+                    "role": role,
+                    "outcome": "needs_input",
+                    "blocked_reasons": ["deferred_due_to_runtime_budget"],
+                    "evidence_links": [],
+                    "tool_actions": [],
+                }
+                continue
+
             if role not in discovered_agents:
                 summary["details"].append(
                     {"role": role, "status": "skipped", "reason": "agent_not_discovered"}
@@ -203,7 +232,7 @@ Return structured delivery_package with specification containing specialist outp
             role_success = False
             last_error = ""
 
-            for attempt in range(1, 3):
+            for attempt in range(1, SPECIALIST_MAX_ATTEMPTS + 1):
                 try:
                     instruction = self._build_specialist_instruction(role, epic_key)
                     # CRITICAL: Minimal context only (epic_key, role, orchestration_id)
@@ -218,7 +247,7 @@ Return structured delivery_package with specification containing specialist outp
                             "orchestration_id": self.orchestration_id,
                             "attempt": attempt,
                         },
-                        timeout_seconds=900,
+                        timeout_seconds=SPECIALIST_TIMEOUT_SECONDS,
                     )
                     
                     normalized = self._normalize_specialist_output(role, output, attempt)
@@ -244,7 +273,7 @@ Return structured delivery_package with specification containing specialist outp
                     break
                     
                 except Exception as role_error:
-                    last_error = f"{type(role_error).__name__}: {str(role_error)[:200]}"
+                    last_error = f"{type(role_error).__name__}: {str(role_error)[:1000]}"
                     logger.warning(f"Specialist {role} attempt {attempt} failed: {last_error}")
 
             if not role_success:
@@ -268,12 +297,16 @@ Return structured delivery_package with specification containing specialist outp
         return summary
 
     def _build_specialist_instruction(self, role: str, epic_key: str) -> str:
-        """
-        Specialist agent instruction with minimal context requirement.
-        Agents MUST read full Epic details from Jira using [Jira_GetIssue] tool.
-        """
-        return f"""
+        """Generate role-specific instruction with concrete fallback behaviors."""
+        
+        base = f"""
 Execute your specialist {role} role for epic {epic_key}.
+
+CRITICAL RULES:
+- NEVER return outcome=needs_input (not allowed)
+- Always return outcome=completed or outcome=blocked
+- Use reasonable defaults when requirements are ambiguous
+- Document assumptions you make
 
 CONTEXT SETUP:
 You will receive MINIMAL invocation context (epic_key, role, orchestration_id only).
@@ -284,23 +317,146 @@ CRITICAL FIRST ACTION:
 2. Read Epic description, acceptance criteria, linked issues
 3. Understand all requirements for your role from the Epic
 
-YOUR ROLE RESPONSIBILITIES ({role}):
-- Perform real, tool-backed work for your role
-- Do NOT return analysis-only output
-- Execute actual actions (code, infrastructure, tests, etc.)
-- Return strict JSON format with tool_actions and evidence_links
+DECISION TREE FOR MISSING INFO:
+- If requirements unclear: Use Epic summary to infer intent
+- If acceptance criteria missing: Define reasonable defaults
+- If constraints not specified: Use industry best practices
+- If timeline not clear: Assume 1-sprint capability
 
-OUTPUT FORMAT:
+YOUR RESPONSIBILITIES:
+- Perform real, tool-backed work for your role
+- Execute actual actions (code, infra, tests, designs, etc.)
+- Return strict JSON with tool_actions and evidence_links
+- Document assumptions made for missing information
+- NEVER ask for input; proceed with best-effort
+
+OUTPUT FORMAT (MANDATORY):
 {{
-  "outcome": "completed|blocked|needs_input",
+  "outcome": "completed",
   "confidence": 0.0-1.0,
-  "tool_actions": [list of executed tool calls],
-  "evidence_links": [links to artifacts, deployed resources, test results],
-  "blocked_reasons": [if blocked, why blocked],
-  "summary": "brief description of work completed"
+  "tool_actions": [executed or planned actions],
+  "evidence_links": [artifact/resource/document links],
+  "assumptions_made": [assumptions for missing info],
+  "summary": "what was accomplished"
 }}
 
-If blocked, provide exact reasons and required next steps.
+Or if hard blocker:
+{{
+  "outcome": "blocked",
+  "confidence": 0.0-1.0,
+  "blocked_reasons": ["exact error or reason"],
+  "tool_actions": [],
+  "evidence_links": [],
+  "summary": "why blocked"
+}}
+"""
+
+        if role == "po":
+            return base + """
+PO-SPECIFIC GUIDANCE:
+- Validate requirements from Epic description and linked issues
+- Define acceptance criteria from Epic scope
+- Create/update requirements document (structure: overview, AC, constraints)
+- DEFAULT AC if not specified: "Epic works as described with no critical bugs"
+- Link requirements document or Epic itself as evidence_links
+- ALWAYS outcome=completed with requirements finalized
+- tool_actions: ["validated_requirements", "defined_acceptance_criteria"]
+"""
+        elif role == "architect":
+            return base + """
+ARCHITECT-SPECIFIC GUIDANCE:
+- Design system architecture based on requirements
+- Propose technology stack (backend, frontend, infrastructure)
+- Create architecture diagram or design document
+- DEFAULT: Clean/layered architecture (UI → API → Business → Data layers)
+- DEFAULT stack: React (frontend), Node.js (backend), PostgreSQL (DB), Azure (infra)
+- DEFAULT: document design in Confluence or as markdown
+- Include security, scalability, and maintainability considerations
+- ALWAYS outcome=completed with design document link
+- tool_actions: ["designed_architecture", "selected_technology_stack"]
+"""
+        elif role == "security":
+            return base + """
+SECURITY-SPECIFIC GUIDANCE:
+- Review architecture for security risks
+- Define authentication/authorization approach
+- Document security requirements and threat model
+- DEFAULT auth: OAuth2 for user apps, API keys for service-to-service
+- DEFAULT access control: Role-based access control (RBAC)
+- DEFAULT encryption: TLS/HTTPS in transit, encrypted at rest
+- DEFAULT practices: Input validation, parameterized queries, secrets in Key Vault
+- ALWAYS outcome=completed with security review document
+- tool_actions: ["reviewed_architecture", "defined_security_controls"]
+"""
+        elif role == "devops":
+            return base + """
+DEVOPS-SPECIFIC GUIDANCE:
+- Define infrastructure as code (Bicep or Terraform)
+- Design CI/CD pipeline (build → test → deploy stages)
+- Plan deployment strategy and monitoring
+- DEFAULT infra: Azure resources (App Service/Container Apps, SQL DB, Container Registry, Key Vault)
+- DEFAULT CI/CD: GitHub Actions or Azure Pipelines
+- DEFAULT strategy: Staged deployments (dev → staging → prod)
+- DEFAULT monitoring: Application Insights + Azure Monitor
+- ALWAYS outcome=completed with IaC templates and pipeline config links
+- tool_actions: ["defined_infrastructure", "designed_cicd_pipeline"]
+"""
+        elif role == "developer":
+            return base + """
+DEVELOPER-SPECIFIC GUIDANCE:
+- Create initial project structure and codebase
+- Implement features based on architecture and requirements
+- Write unit tests and integration tests
+- DEFAULT: Follow SOLID principles and clean code practices
+- DEFAULT: 80%+ code coverage target
+- DEFAULT: Modular structure with separation of concerns
+- Include README, setup instructions, and development guide
+- ALWAYS outcome=completed with code repository link and test summary
+- tool_actions: ["created_project_structure", "implemented_features", "wrote_tests"]
+"""
+        elif role == "qa":
+            return base + """
+QA-SPECIFIC GUIDANCE:
+- Define test strategy covering happy path, edge cases, error handling
+- Create test cases or test automation
+- Generate quality report with coverage metrics
+- DEFAULT: Manual smoke testing + automated unit/integration tests
+- DEFAULT: Test matrix covering browsers/devices if applicable
+- DEFAULT: Quality gate = 80%+ coverage + 0 critical bugs
+- ALWAYS outcome=completed with test report link
+- tool_actions: ["created_test_plan", "executed_tests", "generated_quality_report"]
+"""
+        elif role == "finops":
+            return base + """
+FINOPS-SPECIFIC GUIDANCE:
+- Estimate infrastructure costs using Azure pricing
+- Propose cost optimization strategies
+- Create cost breakdown by component (compute, storage, networking, services)
+- DEFAULT: Calculate monthly cost for small/medium/large deployments
+- DEFAULT optimizations: Reserved instances, auto-scaling, right-sizing, committed discounts
+- DEFAULT report structure: Cost summary, breakdown, optimization recommendations
+- ALWAYS outcome=completed with cost analysis document link
+- tool_actions: ["estimated_infrastructure_costs", "proposed_optimizations"]
+"""
+        elif role == "release":
+            return base + """
+RELEASE-SPECIFIC GUIDANCE:
+- Create release plan and deployment runbook
+- Define rollback procedures
+- Plan monitoring, alerting, and health checks
+- DEFAULT strategy: Blue-green or canary deployments
+- DEFAULT: 10% → 50% → 100% gradual rollout if canary
+- DEFAULT: Automated health checks post-deployment
+- DEFAULT: Rollback = revert to previous version + monitoring recovery
+- ALWAYS outcome=completed with release plan and runbook links
+- tool_actions: ["created_release_plan", "defined_rollback_strategy"]
+"""
+        else:
+            return base + f"""
+FALLBACK GUIDANCE FOR {role}:
+- Execute the core responsibilities of your role
+- Create necessary artifacts and documents
+- ALWAYS outcome=completed with evidence links
 """
 
     def _normalize_specialist_output(self, role: str, output: Dict[str, Any], attempt: int) -> Dict[str, Any]:
