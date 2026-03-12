@@ -241,7 +241,7 @@ def add_orchestration_comment(jira_client: Any, epic_key: str, comment: str) -> 
     payload = {"body": comment}
     _http_json_request(
         "POST",
-        f"{JIRA_BASE_URL}/rest/api/2/issue/{epic_key}/comment",
+        f"{JIRA_BASE_URL}/rest/api/3/issue/{epic_key}/comment",
         headers=_jira_auth_headers(),
         payload=payload,
         timeout=30,
