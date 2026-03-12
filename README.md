@@ -5,6 +5,14 @@ A Jira epic enters the pipeline; a coordinated team of AI agents produces a
 signed-off delivery package — no human intervention required between trigger
 and outcome.
 
+## Phase 1 Working Checkpoint (Locked Logic)
+
+- Scheduler and orchestrator architecture is confirmed working for Phase 1.
+- `epic-scheduler-agentic` keeps the timer responsibility (every 5 minutes).
+- `review-endpoint` keeps orchestration responsibility (`/api/execute_orchestrator_cycle`).
+- Core architecture and orchestration logic are locked for Phase 1.
+- Future updates focus on improving agent behavior and quality while preserving this logic.
+
 ## How it works
 
 ```

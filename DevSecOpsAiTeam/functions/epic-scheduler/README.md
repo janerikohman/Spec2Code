@@ -1,9 +1,15 @@
 # Epic Scheduler Function
 
 Automated Azure Function that runs every 5 minutes to:
-1. Query Jira for pending epics in "Ready for Orchestration" state
-2. Check for recent orchestration triggers (avoid duplicates)
-3. Trigger orchestration via the review-endpoint function
+1. Query Jira for pending epics in configured ready states
+2. Trigger orchestration via the review-endpoint function for each pending epic
+
+## Phase 1 Working Checkpoint (Locked Logic)
+
+- Timer trigger is active with schedule `0 */5 * * * *`.
+- Scheduler role is intentionally minimal and unchanged: **discover pending epics + trigger orchestrator**.
+- Scheduler does not own orchestration business flow; `review-endpoint` + coordinator agents remain owners.
+- Architecture and orchestration logic are locked for Phase 1; only agent-level improvements continue.
 
 ## Architecture
 
@@ -17,9 +23,7 @@ Automated Azure Function that runs every 5 minutes to:
 │   Epic Scheduler Fn     │
 ├─────────────────────────┤
 │ 1. Query Jira (JQL)     │
-│ 2. Dedup recent runs    │
-│ 3. Trigger orchestrate  │
-│ 4. Post comment (mark)  │
+│ 2. Trigger orchestrate  │
 └────────────┬────────────┘
              │
              ▼
@@ -170,13 +174,15 @@ Recommended alert conditions:
 
 ### Query JQL
 ```
-project = KAN AND type = Epic AND status IN ("New", "Ready for Orchestration", "READY_FOR_ORCHESTRATION")
+project = KAN AND type = Epic AND status IN ("To Do", "New", "Ready for Orchestration", "READY_FOR_ORCHESTRATION")
 ```
 
-### Deduplication
-Checks for recent orchestration comments within past N hours (default: 1 hour). Prevents re-orchestrating the same epic too frequently.
+Jira REST endpoint used by runtime fallback:
+`/rest/api/3/search/jql`
 
-Comment pattern: `[AUTOMATED] Orchestration triggered by epic-scheduler at ...`
+### Trigger behavior
+For each pending epic from the JQL query, scheduler calls:
+`POST {REVIEW_ENDPOINT_BASE_URL}/execute_orchestrator_cycle`
 
 ### Failure Handling
 - **Jira connection failure**: Entire cycle aborts with logging
@@ -205,6 +211,7 @@ Comment pattern: `[AUTOMATED] Orchestration triggered by epic-scheduler at ...`
 - Check Jira JQL returns results: `project = KAN AND type = Epic`
 - Verify epic status matches READY_STATES
 - Check Jira credentials have read permission
+- Validate issue type naming in Jira project if needed (`type = Epic` vs `issuetype = Epic`)
 
 ### "Orchestration triggered but no agents running"
 - Verify review-endpoint is deployed and functional

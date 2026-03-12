@@ -5,14 +5,13 @@ Queries Jira every 5 minutes for pending epics and triggers orchestration via re
 import os
 import json
 import logging
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple, Optional
 import azure.functions as func
-
-try:
-    import requests
-except Exception:
-    requests = None
 
 try:
     from jira import JIRA
@@ -39,13 +38,14 @@ logger = logging.getLogger("epic-scheduler")
 
 # ==================== CONSTANTS ====================
 READY_STATES = [
+    "To Do",
+    "TO DO",
     "New",
     "Ready for Orchestration",
     "READY_FOR_ORCHESTRATION",
     "new",
     "ready",
 ]
-RECENT_ORCHESTRATION_WINDOW_HOURS = 1
 
 
 # ==================== JIRA CLIENT ====================
@@ -59,17 +59,60 @@ def get_jira_client() -> Any:
     Raises:
         ValueError: If credentials are not configured
     """
-    if JIRA is None:
-        raise ImportError("jira dependency is not available in the function runtime")
-
     if not JIRA_EMAIL or not JIRA_API_TOKEN:
         raise ValueError("JIRA_EMAIL and JIRA_API_TOKEN must be configured")
+
+    if JIRA is None:
+        logger.warning("jira dependency is not available in runtime, using Jira REST fallback")
+        return None
     
     return JIRA(
         server=JIRA_BASE_URL,
         basic_auth=(JIRA_EMAIL, JIRA_API_TOKEN),
         options={"agile_rest_path": "agile/1.0"}
     )
+
+
+def _jira_auth_headers() -> Dict[str, str]:
+    """Build Basic Auth headers for Jira REST API fallback."""
+    import base64
+
+    token = base64.b64encode(f"{JIRA_EMAIL}:{JIRA_API_TOKEN}".encode()).decode()
+    return {
+        "Authorization": f"Basic {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _http_json_request(
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    timeout: int = 30,
+    params: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[int, Dict[str, Any], str]:
+    """Perform HTTP request using stdlib and return (status, json_body, raw_body)."""
+    if params:
+        query = urllib.parse.urlencode(params)
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}{query}"
+
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = response.getcode()
+            raw_body = response.read().decode("utf-8")
+            json_body = json.loads(raw_body) if raw_body else {}
+            return status, json_body, raw_body
+    except urllib.error.HTTPError as exc:
+        raw_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {raw_body}") from exc
+    except (urllib.error.URLError, socket.timeout) as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 # ==================== JIRA QUERIES ====================
@@ -91,6 +134,19 @@ def query_pending_epics(jira_client: Any) -> List[str]:
     """
     
     try:
+        if jira_client is None:
+            _, body, _ = _http_json_request(
+                "GET",
+                f"{JIRA_BASE_URL}/rest/api/3/search/jql",
+                headers=_jira_auth_headers(),
+                params={"jql": jql, "maxResults": 100, "fields": "key"},
+                timeout=30,
+            )
+            issues = body.get("issues", [])
+            epic_keys = [issue.get("key") for issue in issues if issue.get("key")]
+            logger.info(f"Found {len(epic_keys)} pending epics via REST: {epic_keys}")
+            return epic_keys
+
         issues = jira_client.search_issues(jql, maxResults=100)
         epic_keys = [issue.key for issue in issues]
         logger.info(f"Found {len(epic_keys)} pending epics: {epic_keys}")
@@ -99,41 +155,6 @@ def query_pending_epics(jira_client: Any) -> List[str]:
         logger.error(f"Failed to query Jira for pending epics: {e}")
         raise
 
-
-def get_recent_orchestration_comment(
-    jira_client: Any,
-    epic_key: str, 
-    window_hours: int = RECENT_ORCHESTRATION_WINDOW_HOURS
-) -> Optional[str]:
-    """
-    Check if epic has recent orchestration trigger comment
-    
-    Args:
-        jira_client: Authenticated Jira client
-        epic_key: Epic key (e.g., "KAN-133")
-        window_hours: Look back window in hours (default 1)
-        
-    Returns:
-        Comment ID if found, None otherwise
-    """
-    try:
-        issue = jira_client.issue(epic_key, expand="changelog")
-        cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
-        
-        # Check comments for orchestration trigger marker
-        for comment in issue.fields.comment.comments:
-            comment_created = datetime.fromisoformat(
-                comment.created.replace('Z', '+00:00')
-            )
-            if comment_created > cutoff_time:
-                if "Orchestration triggered" in comment.body or "ORCHESTRATION_TRIGGERED" in comment.body:
-                    logger.info(f"Found recent orchestration comment on {epic_key}")
-                    return comment.id
-        
-        return None
-    except JIRAError as e:
-        logger.warning(f"Failed to get comments for {epic_key}: {e}")
-        return None
 
 
 # ==================== ORCHESTRATION TRIGGER ====================
@@ -147,10 +168,6 @@ def trigger_orchestration(epic_key: str) -> Tuple[bool, str]:
     Returns:
         Tuple of (success: bool, message: str)
     """
-    if requests is None:
-        logger.error("requests dependency is not available in the function runtime")
-        return False, "Missing requests dependency"
-
     if not REVIEW_ENDPOINT_BASE_URL or not REVIEW_ENDPOINT_API_KEY:
         logger.error("REVIEW_ENDPOINT_BASE_URL or REVIEW_ENDPOINT_API_KEY not configured")
         return False, "Endpoint not configured"
@@ -171,25 +188,23 @@ def trigger_orchestration(epic_key: str) -> Tuple[bool, str]:
     endpoint_url = f"{REVIEW_ENDPOINT_BASE_URL}/execute_orchestrator_cycle"
     
     try:
-        response = requests.post(
+        status_code, _, raw_body = _http_json_request(
+            "POST",
             endpoint_url,
-            json=payload,
             headers=headers,
+            payload=payload,
             timeout=30
         )
         
-        if response.status_code in [200, 202]:
+        if status_code in [200, 202]:
             logger.info(f"Successfully triggered orchestration for {epic_key}")
-            return True, f"Status {response.status_code}"
+            return True, f"Status {status_code}"
         else:
-            error_msg = f"Status {response.status_code}: {response.text}"
+            error_msg = f"Status {status_code}: {raw_body}"
             logger.error(f"Failed to trigger orchestration for {epic_key}: {error_msg}")
             return False, error_msg
-            
-    except requests.exceptions.Timeout:
-        logger.error(f"Timeout triggering orchestration for {epic_key}")
-        return False, "Timeout"
-    except requests.exceptions.RequestException as e:
+
+    except Exception as e:
         logger.error(f"Failed to trigger orchestration for {epic_key}: {e}")
         return False, str(e)
 
@@ -199,22 +214,19 @@ def run_scheduler_cycle() -> Dict[str, int]:
     """
     Execute one scheduler cycle:
     1. Query Jira for pending epics
-    2. Check for recent orchestration (deduplicate)
-    3. Trigger orchestration for new epics
+    2. Trigger orchestration (Foundry agents handle comments/state)
     
     Returns:
         Dict with results:
         {
             "total_checked": int,
             "triggered": int,
-            "skipped_recent": int,
             "errors": int
         }
     """
     results = {
         "total_checked": 0,
         "triggered": 0,
-        "skipped_recent": 0,
         "errors": 0
     }
     
@@ -225,26 +237,11 @@ def run_scheduler_cycle() -> Dict[str, int]:
         
         for epic_key in pending_epics:
             try:
-                # Check for recent orchestration
-                recent_comment = get_recent_orchestration_comment(jira_client, epic_key)
-                if recent_comment:
-                    logger.info(f"Skipping {epic_key}: recent orchestration found")
-                    results["skipped_recent"] += 1
-                    continue
-                
-                # Trigger orchestration
+                # Trigger orchestration - Foundry agents handle everything else
                 success, message = trigger_orchestration(epic_key)
                 if success:
-                    # Add comment to Jira to mark orchestration triggered
-                    try:
-                        jira_client.add_comment(
-                            epic_key,
-                            f"[AUTOMATED] Orchestration triggered by epic-scheduler at {datetime.utcnow().isoformat()}Z"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to add comment to {epic_key}: {e}")
-                    
                     results["triggered"] += 1
+                    logger.info(f"Triggered orchestration for {epic_key}")
                 else:
                     logger.error(f"Failed to trigger orchestration for {epic_key}: {message}")
                     results["errors"] += 1
@@ -285,7 +282,6 @@ def epic_scheduler(mytimer: func.TimerRequest) -> None:
             f"Scheduler cycle complete: "
             f"checked={results['total_checked']}, "
             f"triggered={results['triggered']}, "
-            f"skipped={results['skipped_recent']}, "
             f"errors={results['errors']}"
         )
     except Exception as e:

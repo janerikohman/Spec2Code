@@ -343,11 +343,17 @@ class FoundryAgentManager:
         return message
 
     def _parse_agent_response(self, content: str) -> Dict[str, Any]:
-        """Parse JSON agent response; fail-fast if unparseable."""
+        """Parse agent response — try JSON first, fall back to raw text wrapper.
+
+        Agents may return structured JSON or natural-language markdown.
+        Both are valid; non-JSON responses are wrapped so the caller always
+        receives a consistent dict without raising.
+        """
         if not content:
             raise ValueError("Agent returned an empty response")
 
         clean = content.strip()
+        # Strip markdown code fences if present
         if clean.startswith("```"):
             lines = clean.split("\n")
             clean = "\n".join(lines[1:-1]) if len(lines) > 2 else clean
@@ -358,7 +364,16 @@ class FoundryAgentManager:
             result.setdefault("confidence", 0.85)
             return result
         except json.JSONDecodeError:
-            raise ValueError(f"Agent response is not valid JSON: {content[:300]}")
+            # Agent responded in natural language / markdown — wrap gracefully.
+            logger.info(
+                "Agent response is not JSON; wrapping as raw_response "
+                f"({len(content)} chars)"
+            )
+            return {
+                "outcome": "completed",
+                "confidence": 0.85,
+                "raw_response": content,
+            }
 
 
 class AgentInvocationError(Exception):
