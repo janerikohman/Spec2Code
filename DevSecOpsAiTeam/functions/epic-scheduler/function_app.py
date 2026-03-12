@@ -138,7 +138,7 @@ def query_pending_epics(jira_client: Any) -> List[str]:
         if jira_client is None:
             _, body, _ = _http_json_request(
                 "GET",
-                f"{JIRA_BASE_URL}/rest/api/3/search",
+                f"{JIRA_BASE_URL}/rest/api/3/search/jql",
                 headers=_jira_auth_headers(),
                 params={"jql": jql, "maxResults": 100, "fields": "key"},
                 timeout=30,
