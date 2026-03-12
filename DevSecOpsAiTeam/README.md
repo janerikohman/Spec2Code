@@ -10,6 +10,13 @@ Automated epic-delivery pipeline using **100% Agentic Architecture** on Azure AI
 - Core architecture and orchestration logic are now treated as **locked for Phase 1**.
 - Future work is limited to agent-quality and execution improvements, not architecture/logic changes.
 
+## Phase 2 Execution Hardening (No Architecture/Logic Change)
+
+- Phase 2 keeps the same architecture and orchestration logic from Phase 1.
+- Blockers are fixed in-place with targeted changes only (no topology refactor).
+- Follow [docs/PHASE2_IMPLEMENTATION_CHECKLIST.md](docs/PHASE2_IMPLEMENTATION_CHECKLIST.md) for acceptance criteria and evidence requirements.
+- Epic completion now requires user-visible outcomes: app URL, test report, deployment proof, and story closure traceability.
+
 | Component | Resource | Status |
 |-----------|----------|--------|
 | Coordinator Agent | `asst_7J7tf7yRPJRdQcBvo0TIrNi2` | ✅ Live |

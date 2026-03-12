@@ -298,6 +298,67 @@ ensure_assistant() {
                 }
               }
             }
+          },
+          "/api/tool/runtime/execute_script": {
+            post: {
+              operationId: "runtime_execute_script",
+              description: "Execute whitelisted project script for infra/code/deploy/test workflows.",
+              requestBody: {
+                required: true,
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["action"],
+                      properties: {
+                        action: { type: "string" },
+                        epic_key: { type: "string" }
+                      }
+                    }
+                  }
+                }
+              },
+              responses: {
+                "200": {
+                  description: "Script execution result",
+                  content: {
+                    "application/json": {
+                      schema: { type: "object" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "/api/tool/runtime/check_url": {
+            post: {
+              operationId: "runtime_check_url",
+              description: "Check runtime URL/health endpoint status.",
+              requestBody: {
+                required: true,
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["url"],
+                      properties: {
+                        url: { type: "string" }
+                      }
+                    }
+                  }
+                }
+              },
+              responses: {
+                "200": {
+                  description: "Runtime URL check result",
+                  content: {
+                    "application/json": {
+                      schema: { type: "object" }
+                    }
+                  }
+                }
+              }
+            }
           }
           }
           | with_entries(select(.key as $k | ($allowed_paths | index($k))))
@@ -379,13 +440,16 @@ role_allowed_paths_json() {
   local role="$1"
   case "${role}" in
     coordinator)
-      printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment","/api/tool/jira/transition_issue","/api/tool/jira/list_open_dispatch_issues","/api/tool/jira/create_dispatch_story","/api/tool/confluence/create_page"]'
+      printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment","/api/tool/jira/transition_issue","/api/tool/jira/list_open_dispatch_issues","/api/tool/jira/create_dispatch_story","/api/tool/confluence/create_page","/api/tool/runtime/execute_script","/api/tool/runtime/check_url"]'
       ;;
     po-requirements)
       printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment"]'
       ;;
-    architect|security-architect|devops-iac|developer|tester-qa|finops|release-manager)
+    architect|security-architect|finops)
       printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment","/api/tool/confluence/create_page"]'
+      ;;
+    devops-iac|developer|tester-qa|release-manager)
+      printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment","/api/tool/confluence/create_page","/api/tool/runtime/execute_script","/api/tool/runtime/check_url"]'
       ;;
     *)
       printf '%s\n' '["/api/tool/jira/get_issue_context","/api/tool/jira/add_comment"]'
