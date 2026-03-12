@@ -243,6 +243,51 @@ jq -n \
           }
         }
       },
+      "/api/tool/runtime/execute_script": {
+        post: {
+          operationId: "runtime_execute_script",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["action"],
+                  properties: {
+                    action: { type: "string" },
+                    epic_key: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Script execution result" }
+          }
+        }
+      },
+      "/api/tool/runtime/check_url": {
+        post: {
+          operationId: "runtime_check_url",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["url"],
+                  properties: {
+                    url: { type: "string" }
+                  }
+                }
+              }
+            }
+          },
+          responses: {
+            "200": { description: "Runtime URL check result" }
+          }
+        }
+      },
       "/api/tool/foundry/run_role_agent": {
         post: {
           operationId: "foundry_run_role_agent",

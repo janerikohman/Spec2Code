@@ -13,6 +13,12 @@ and outcome.
 - Core architecture and orchestration logic are locked for Phase 1.
 - Future updates focus on improving agent behavior and quality while preserving this logic.
 
+## Phase 2 Execution Hardening (No Architecture/Logic Change)
+
+- Phase 2 work is constrained to blocker fixes and delivery-quality improvements within the existing Phase 1 flow.
+- Use [DevSecOpsAiTeam/docs/PHASE2_IMPLEMENTATION_CHECKLIST.md](DevSecOpsAiTeam/docs/PHASE2_IMPLEMENTATION_CHECKLIST.md) as the execution contract.
+- Every completed epic must include: running Azure app URL, test evidence, deployment evidence, and closed stories with traceability links.
+
 ## How it works
 
 ```

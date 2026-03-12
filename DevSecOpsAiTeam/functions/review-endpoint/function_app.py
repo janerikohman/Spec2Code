@@ -11,8 +11,10 @@ import json
 import os
 import logging
 import base64
+import subprocess
 from datetime import datetime
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List
 
 import azure.functions as func
 import requests
@@ -381,6 +383,80 @@ def _resolve_epic_link_field_id(headers: Dict[str, str], jira_base_url: str) -> 
     return ""
 
 
+def _review_endpoint_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _project_root() -> Path:
+    return _review_endpoint_root().parents[2]
+
+
+def _run_whitelisted_script(action: str, epic_key: str = "") -> Dict[str, Any]:
+    root = _project_root()
+    allowed_actions: Dict[str, Dict[str, Any]] = {
+        "prepare_bitbucket_repo": {
+            "runner": "python",
+            "script": root / "scripts" / "prepare_bitbucket_epic_repo.py",
+            "args": ["--epic", epic_key] if epic_key else [],
+        },
+        "create_bitbucket_pr": {
+            "runner": "python",
+            "script": root / "scripts" / "create_bitbucket_pr.py",
+            "args": ["--epic", epic_key] if epic_key else [],
+        },
+        "run_specialist_dispatch": {
+            "runner": "python",
+            "script": root / "scripts" / "run_specialist_dispatch.py",
+            "args": ["--epic", epic_key] if epic_key else [],
+        },
+        "deploy_review_function": {
+            "runner": "bash",
+            "script": root / "scripts" / "deploy-review-function.sh",
+            "args": [],
+        },
+        "deploy_epic_scheduler": {
+            "runner": "bash",
+            "script": root / "scripts" / "deploy-epic-scheduler.sh",
+            "args": [],
+        },
+        "test_orchestrator_cycle": {
+            "runner": "bash",
+            "script": root / "scripts" / "test-orchestrator-cycle.sh",
+            "args": [],
+        },
+    }
+
+    selected = allowed_actions.get(action)
+    if not selected:
+        raise RuntimeError(f"Unsupported action: {action}")
+
+    script_path = selected["script"]
+    if not Path(script_path).exists():
+        raise RuntimeError(f"Script not found: {script_path}")
+
+    if selected["runner"] == "python":
+        command: List[str] = ["python3", str(script_path), *selected["args"]]
+    else:
+        command = ["bash", str(script_path), *selected["args"]]
+
+    result = subprocess.run(
+        command,
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+    return {
+        "ok": result.returncode == 0,
+        "action": action,
+        "command": command,
+        "returncode": result.returncode,
+        "stdout": (result.stdout or "")[:8000],
+        "stderr": (result.stderr or "")[:8000],
+    }
+
+
 @app.route(route="tool/jira/get_issue_context", methods=["POST"])
 def tool_jira_get_issue_context(req: func.HttpRequest) -> func.HttpResponse:
     try:
@@ -605,6 +681,47 @@ def tool_confluence_create_page(req: func.HttpRequest) -> func.HttpResponse:
         return _tool_response({"ok": True, "url": page_url, "title": title})
     except Exception as e:
         return _tool_error("confluence_create_page_failed", 500, str(e))
+
+
+@app.route(route="tool/runtime/execute_script", methods=["POST"])
+def tool_runtime_execute_script(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        action = (payload.get("action") or "").strip()
+        epic_key = (payload.get("epic_key") or "").strip()
+
+        if not action:
+            return _tool_error("action is required", 400)
+
+        result = _run_whitelisted_script(action=action, epic_key=epic_key)
+        status_code = 200 if result.get("ok") else 500
+        return _tool_response(result, status_code=status_code)
+    except subprocess.TimeoutExpired:
+        return _tool_error("runtime_execute_script_timeout", 500, "Script execution timed out")
+    except Exception as e:
+        return _tool_error("runtime_execute_script_failed", 500, str(e))
+
+
+@app.route(route="tool/runtime/check_url", methods=["POST"])
+def tool_runtime_check_url(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        payload = req.get_json()
+        url = (payload.get("url") or "").strip()
+        if not url:
+            return _tool_error("url is required", 400)
+
+        response = requests.get(url, timeout=30)
+        return _tool_response(
+            {
+                "ok": response.status_code < 400,
+                "url": url,
+                "status_code": response.status_code,
+                "response_excerpt": (response.text or "")[:1000],
+                "checked_at": datetime.utcnow().isoformat(),
+            }
+        )
+    except Exception as e:
+        return _tool_error("runtime_check_url_failed", 500, str(e))
 
 
 # Agent-core mode: orchestration intelligence lives in AI Foundry coordinator agent.
