@@ -46,7 +46,6 @@ READY_STATES = [
     "new",
     "ready",
 ]
-RECENT_ORCHESTRATION_WINDOW_HOURS = 1
 
 
 # ==================== JIRA CLIENT ====================
@@ -157,96 +156,6 @@ def query_pending_epics(jira_client: Any) -> List[str]:
         raise
 
 
-def get_recent_orchestration_comment(
-    jira_client: Any,
-    epic_key: str, 
-    window_hours: int = RECENT_ORCHESTRATION_WINDOW_HOURS
-) -> Optional[str]:
-    """
-    Check if epic has recent orchestration trigger comment
-    
-    Args:
-        jira_client: Authenticated Jira client
-        epic_key: Epic key (e.g., "KAN-133")
-        window_hours: Look back window in hours (default 1)
-        
-    Returns:
-        Comment ID if found, None otherwise
-    """
-    try:
-        if jira_client is None:
-            _, body, _ = _http_json_request(
-                "GET",
-                f"{JIRA_BASE_URL}/rest/api/3/issue/{epic_key}/comment",
-                headers=_jira_auth_headers(),
-                timeout=30,
-            )
-            comments = body.get("comments", [])
-            cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
-
-            for comment in comments:
-                comment_created_raw = comment.get("created", "")
-                if not comment_created_raw:
-                    continue
-                comment_created = datetime.fromisoformat(comment_created_raw.replace('Z', '+00:00')).replace(tzinfo=None)
-                if comment_created <= cutoff_time:
-                    continue
-
-                body = comment.get("body")
-                if isinstance(body, str):
-                    text = body
-                else:
-                    parts: List[str] = []
-                    for block in body.get("content", []) if isinstance(body, dict) else []:
-                        for node in block.get("content", []):
-                            if isinstance(node, dict) and "text" in node:
-                                parts.append(node["text"])
-                    text = " ".join(parts)
-
-                if "Orchestration triggered" in text or "ORCHESTRATION_TRIGGERED" in text:
-                    comment_id = str(comment.get("id", ""))
-                    logger.info(f"Found recent orchestration comment on {epic_key} via REST")
-                    return comment_id or None
-
-            return None
-
-        issue = jira_client.issue(epic_key, expand="changelog")
-        cutoff_time = datetime.utcnow() - timedelta(hours=window_hours)
-        
-        # Check comments for orchestration trigger marker
-        for comment in issue.fields.comment.comments:
-            comment_created = datetime.fromisoformat(
-                comment.created.replace('Z', '+00:00')
-            )
-            if comment_created > cutoff_time:
-                if "Orchestration triggered" in comment.body or "ORCHESTRATION_TRIGGERED" in comment.body:
-                    logger.info(f"Found recent orchestration comment on {epic_key}")
-                    return comment.id
-        
-        return None
-    except JIRAError as e:
-        logger.warning(f"Failed to get comments for {epic_key}: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to get comments for {epic_key} via REST: {e}")
-        return None
-
-
-def add_orchestration_comment(jira_client: Any, epic_key: str, comment: str) -> None:
-    """Add scheduler marker comment using jira SDK or REST fallback."""
-    if jira_client is not None:
-        jira_client.add_comment(epic_key, comment)
-        return
-
-    payload = {"body": comment}
-    _http_json_request(
-        "POST",
-        f"{JIRA_BASE_URL}/rest/api/3/issue/{epic_key}/comment",
-        headers=_jira_auth_headers(),
-        payload=payload,
-        timeout=30,
-    )
-
 
 # ==================== ORCHESTRATION TRIGGER ====================
 def trigger_orchestration(epic_key: str) -> Tuple[bool, str]:
@@ -305,22 +214,19 @@ def run_scheduler_cycle() -> Dict[str, int]:
     """
     Execute one scheduler cycle:
     1. Query Jira for pending epics
-    2. Check for recent orchestration (deduplicate)
-    3. Trigger orchestration for new epics
+    2. Trigger orchestration (Foundry agents handle comments/state)
     
     Returns:
         Dict with results:
         {
             "total_checked": int,
             "triggered": int,
-            "skipped_recent": int,
             "errors": int
         }
     """
     results = {
         "total_checked": 0,
         "triggered": 0,
-        "skipped_recent": 0,
         "errors": 0
     }
     
@@ -331,27 +237,11 @@ def run_scheduler_cycle() -> Dict[str, int]:
         
         for epic_key in pending_epics:
             try:
-                # Check for recent orchestration
-                recent_comment = get_recent_orchestration_comment(jira_client, epic_key)
-                if recent_comment:
-                    logger.info(f"Skipping {epic_key}: recent orchestration found")
-                    results["skipped_recent"] += 1
-                    continue
-                
-                # Trigger orchestration
+                # Trigger orchestration - Foundry agents handle everything else
                 success, message = trigger_orchestration(epic_key)
                 if success:
-                    # Add comment to Jira to mark orchestration triggered
-                    try:
-                        add_orchestration_comment(
-                            jira_client,
-                            epic_key,
-                            f"[AUTOMATED] Orchestration triggered by epic-scheduler at {datetime.utcnow().isoformat()}Z"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to add comment to {epic_key}: {e}")
-                    
                     results["triggered"] += 1
+                    logger.info(f"Triggered orchestration for {epic_key}")
                 else:
                     logger.error(f"Failed to trigger orchestration for {epic_key}: {message}")
                     results["errors"] += 1
