@@ -2,6 +2,13 @@
 
 HTTP-triggered Azure Function (`epicreview257529268`) that serves as the **tool adapter** for all Azure AI Foundry agents.
 
+## Phase 1 Working Checkpoint (Locked Logic)
+
+- `POST /api/execute_orchestrator_cycle` remains the orchestration execution entrypoint.
+- Epic scheduler calls this endpoint on every timer cycle for pending epics.
+- Core architecture/logic remains unchanged for Phase 1.
+- Ongoing improvements are focused on agent behavior and output quality, not orchestration topology.
+
 All routes use **ANONYMOUS** auth.
 
 ## Endpoints

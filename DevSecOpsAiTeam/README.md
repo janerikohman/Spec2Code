@@ -2,6 +2,14 @@
 
 Automated epic-delivery pipeline using **100% Agentic Architecture** on Azure AI Foundry.
 
+## Phase 1 Working Checkpoint (Locked Logic)
+
+- `epic-scheduler-agentic` timer trigger is active on `0 */5 * * * *` (every 5 minutes).
+- Scheduler responsibility is unchanged and minimal: query pending Jira epics and call `POST /api/execute_orchestrator_cycle`.
+- `review-endpoint` remains the orchestration executor and agent coordinator.
+- Core architecture and orchestration logic are now treated as **locked for Phase 1**.
+- Future work is limited to agent-quality and execution improvements, not architecture/logic changes.
+
 | Component | Resource | Status |
 |-----------|----------|--------|
 | Coordinator Agent | `asst_7J7tf7yRPJRdQcBvo0TIrNi2` | ✅ Live |
@@ -44,7 +52,7 @@ Automated epic-delivery pipeline using **100% Agentic Architecture** on Azure AI
   - `POST /api/tool/confluence/create_page`
   - `POST /api/execute_orchestrator_cycle`
   - `GET  /api/health`
-- **`functions/epic-scheduler/`** — Timer trigger (every 5 min): polls Jira JQL, calls `execute_orchestrator_cycle`
+- **`functions/epic-scheduler/`** — Timer trigger (every 5 min): polls Jira JQL for pending epics, calls `execute_orchestrator_cycle`
 
 ### Scripts
 
