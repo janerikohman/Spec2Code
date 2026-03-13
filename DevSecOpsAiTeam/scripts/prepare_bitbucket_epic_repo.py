@@ -58,7 +58,7 @@ def bitbucket_headers(email: str, token: str) -> dict:
     }
 
 
-def ensure_repo(workspace: str, slug: str, project_key: str, headers: dict):
+def ensure_repo(workspace: str, slug: str, project_key: str, headers: dict, epic: str):
     repo_url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{slug}"
     read_resp = requests.get(repo_url, headers=headers, timeout=30)
     if read_resp.status_code == 200:
@@ -69,7 +69,7 @@ def ensure_repo(workspace: str, slug: str, project_key: str, headers: dict):
     payload = {
         "scm": "git",
         "is_private": True,
-        "description": "KAN-148 shopping-list epic delivery repository",
+        "description": f"{epic} shopping-list epic delivery repository",
     }
     if project_key:
         payload["project"] = {"key": project_key}
@@ -169,7 +169,7 @@ def main():
     branch = args.branch.strip() or f"epic/{args.epic.lower()}-delivery-pack"
 
     headers = bitbucket_headers(email, token)
-    repo_data, created = ensure_repo(workspace, repo_slug, project_key, headers)
+    repo_data, created = ensure_repo(workspace, repo_slug, project_key, headers, args.epic)
 
     clone_base = root / ".tmp"
     clone_base.mkdir(parents=True, exist_ok=True)

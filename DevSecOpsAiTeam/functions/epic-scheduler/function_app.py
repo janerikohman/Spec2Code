@@ -126,13 +126,12 @@ def query_pending_epics(jira_client: Any) -> List[str]:
     Returns:
         List of epic keys (e.g., ["KAN-133", "KAN-134"])
     """
-    jql = f"""
-        project = {JIRA_PROJECT_KEY} 
-        AND type = Epic 
-        AND status IN ({', '.join(f'"{s}"' for s in READY_STATES)})
-        ORDER BY created DESC
-    """
-    
+    jql = (
+        f"project = {JIRA_PROJECT_KEY} AND issuetype = Epic "
+        f"AND status IN ({', '.join(f'{chr(34)}{s}{chr(34)}' for s in READY_STATES)}) "
+        f"ORDER BY created DESC"
+    )
+
     try:
         if jira_client is None:
             _, body, _ = _http_json_request(
