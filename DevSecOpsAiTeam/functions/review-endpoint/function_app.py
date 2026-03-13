@@ -702,7 +702,14 @@ def tool_confluence_create_page(req: func.HttpRequest) -> func.HttpResponse:
         page_url = coordinator._create_confluence_page(title=title, storage_html=storage_html)
         return _tool_response({"ok": True, "url": page_url, "title": title})
     except Exception as e:
-        return _tool_error("confluence_create_page_failed", 500, str(e))
+        return _tool_response(
+            {
+                "ok": False,
+                "error": "confluence_create_page_failed",
+                "details": str(e),
+            },
+            status_code=200,
+        )
 
 
 @app.route(route="tool/runtime/execute_script", methods=["POST"])
