@@ -579,6 +579,19 @@ FALLBACK GUIDANCE FOR {role}:
         coordinator_output: Dict[str, Any],
     ) -> None:
         """Store orchestration results in Jira and Confluence."""
+        try:
+            confluence_link = self._create_confluence_page(
+                title=f"{epic_key} - Orchestration Delivery Package",
+                storage_html=self._build_confluence_content(delivery_package, coordinator_output),
+            )
+            artifacts = delivery_package.get("artifact_links", {})
+            if not isinstance(artifacts, dict):
+                artifacts = {}
+            artifacts["confluence_page"] = confluence_link
+            delivery_package["artifact_links"] = artifacts
+        except Exception as e:
+            logger.warning(f"Confluence publish failed for {epic_key}: {e}")
+
         jira_comment = self._build_jira_comment(delivery_package, coordinator_output)
         self._add_jira_comment(epic_key, jira_comment)
 
@@ -587,6 +600,7 @@ FALLBACK GUIDANCE FOR {role}:
         specification = delivery_package.get("specification", {})
         execution_summary = delivery_package.get("execution_summary", {})
         specialist_exec = execution_summary.get("specialist_execution", {})
+        artifact_links = delivery_package.get("artifact_links", {})
 
         signoff_lines = []
         for role in ["po", "architect", "security", "devops", "developer", "qa", "finops", "release"]:
@@ -611,6 +625,7 @@ FALLBACK GUIDANCE FOR {role}:
             f"*Delivery Status:* {delivery_package.get('status', 'UNKNOWN')}\n"
             f"*Orchestration ID:* {delivery_package.get('orchestration_id')}\n"
             f"*Coordinator Outcome:* {coordinator_output.get('outcome', 'unknown')}\n\n"
+            f"*Confluence Page:* {artifact_links.get('confluence_page', 'not_published')}\n\n"
             "h4. Specialist Execution\n"
             f"{chr(10).join(specialist_lines)}\n\n"
             "h4. Specialist Sign-offs\n"
@@ -630,6 +645,60 @@ FALLBACK GUIDANCE FOR {role}:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+    def _confluence_headers(self) -> Dict[str, str]:
+        if not CONFLUENCE_BASE_URL:
+            raise RuntimeError("CONFLUENCE_BASE_URL application setting is missing")
+        _email = _usable_secret_value(JIRA_EMAIL_ENV) or jira_email()
+        _token = _usable_secret_value(JIRA_API_TOKEN_ENV) or jira_api_token()
+        if not _email or not _token:
+            raise RuntimeError("Confluence credentials are not available")
+        encoded = base64.b64encode(f"{_email}:{_token}".encode()).decode()
+        return {
+            "Authorization": f"Basic {encoded}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _build_confluence_content(self, delivery_package: Dict[str, Any], coordinator_output: Dict[str, Any]) -> str:
+        specification = delivery_package.get("specification", {})
+        execution_summary = delivery_package.get("execution_summary", {})
+        return (
+            f"<h1>Delivery Package {delivery_package.get('epic_key', 'unknown')}</h1>"
+            f"<p><strong>Status:</strong> {delivery_package.get('status')}</p>"
+            f"<p><strong>Orchestration ID:</strong> {delivery_package.get('orchestration_id')}</p>"
+            f"<p><strong>Coordinator Outcome:</strong> {coordinator_output.get('outcome')}</p>"
+            f"<h2>Execution Summary</h2><pre>{json.dumps(execution_summary, indent=2)}</pre>"
+            f"<h2>Specification</h2><pre>{json.dumps(specification, indent=2)}</pre>"
+        )
+
+    def _create_confluence_page(self, title: str, storage_html: str) -> str:
+        if not CONFLUENCE_SPACE_KEY:
+            raise RuntimeError("CONFLUENCE_SPACE_KEY application setting is missing")
+        headers = self._confluence_headers()
+        payload = {
+            "type": "page",
+            "title": title,
+            "space": {"key": CONFLUENCE_SPACE_KEY},
+            "body": {
+                "storage": {
+                    "value": storage_html,
+                    "representation": "storage",
+                }
+            },
+        }
+        response = requests.post(
+            f"{CONFLUENCE_BASE_URL}/wiki/rest/api/content",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Confluence API error: {response.status_code} - {response.text[:400]}"
+            )
+        data = response.json()
+        return f"{CONFLUENCE_BASE_URL}/wiki/spaces/{CONFLUENCE_SPACE_KEY}/pages/{data.get('id')}"
 
     def _add_jira_comment(self, epic_key: str, comment_body: str) -> None:
         """Add comment to Jira issue."""

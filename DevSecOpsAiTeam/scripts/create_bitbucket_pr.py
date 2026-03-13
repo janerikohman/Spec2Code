@@ -130,7 +130,7 @@ def commit_pr_marker(workspace: str, repo: str, branch: str, email: str, token: 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epic", required=True)
-    parser.add_argument("--repo-slug", default="kan148-shopping-list-app")
+    parser.add_argument("--repo-slug", default="")
     parser.add_argument("--source-branch", default="")
     parser.add_argument("--dest-branch", default="main")
     args = parser.parse_args()
@@ -147,17 +147,18 @@ def main():
     source_branch = args.source_branch or f"epic/{args.epic.lower()}-delivery-pack"
     headers = auth_headers(email, token)
 
+    repo_slug = args.repo_slug or f"{args.epic.lower().replace('-', '')}-shopping-list-app"
     destination_branch = ensure_destination_branch(
         workspace=workspace,
-        repo=args.repo_slug,
+        repo=repo_slug,
         src_branch=source_branch,
         dst_branch=args.dest_branch,
         headers=headers,
     )
 
-    title = f"KAN-148: Delivery pack bootstrap for shopping-list app"
-    body = """## Summary
-- Bootstrap repository with delivery pack for KAN-148
+    title = f"{args.epic}: Delivery pack bootstrap for shopping-list app"
+    body = f"""## Summary
+- Bootstrap repository with delivery pack for {args.epic}
 - Add CI/CD pipeline, Dockerfile, and Azure Bicep baseline
 - Add local smoke-test script and infra deployment helper
 
@@ -192,7 +193,7 @@ def main():
 
     existing = existing_open_pr(
         workspace=workspace,
-        repo=args.repo_slug,
+        repo=repo_slug,
         src_branch=source_branch,
         dst_branch=destination_branch,
         headers=headers,
@@ -204,7 +205,7 @@ def main():
     else:
         pr_resp = create_pr(
             workspace=workspace,
-            repo=args.repo_slug,
+            repo=repo_slug,
             src_branch=source_branch,
             dst_branch=destination_branch,
             title=title,
@@ -218,7 +219,7 @@ def main():
         elif pr_resp.status_code == 400 and "no changes to be pulled" in pr_resp.text.lower():
             commit_pr_marker(
                 workspace=workspace,
-                repo=args.repo_slug,
+                repo=repo_slug,
                 branch=source_branch,
                 email=email,
                 token=token,
@@ -226,7 +227,7 @@ def main():
             )
             pr_retry = create_pr(
                 workspace=workspace,
-                repo=args.repo_slug,
+                repo=repo_slug,
                 src_branch=source_branch,
                 dst_branch=destination_branch,
                 title=title,
