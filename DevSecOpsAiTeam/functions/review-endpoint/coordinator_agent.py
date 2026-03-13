@@ -258,8 +258,17 @@ Return structured delivery_package with specification containing specialist outp
                 continue
 
             if role not in discovered_agents:
+                summary["failed"] += 1
+                summary["failed_roles"].append(role)
+                specification[role] = {
+                    "role": role,
+                    "outcome": "blocked",
+                    "blocked_reasons": ["agent_not_discovered"],
+                    "evidence_links": [],
+                    "tool_actions": [],
+                }
                 summary["details"].append(
-                    {"role": role, "status": "skipped", "reason": "agent_not_discovered"}
+                    {"role": role, "status": "failed", "reason": "agent_not_discovered"}
                 )
                 continue
 
@@ -312,51 +321,22 @@ Return structured delivery_package with specification containing specialist outp
                     logger.warning(f"Specialist {role} attempt {attempt} failed: {last_error}")
 
             if not role_success:
-                # If the role only failed by returning non-terminal outcomes,
-                # salvage with a documented fallback completion using defaults.
-                if last_error.startswith("role returned outcome="):
-                    specification[role] = {
+                summary["failed"] += 1
+                summary["failed_roles"].append(role)
+                specification[role] = {
+                    "role": role,
+                    "outcome": "blocked",
+                    "blocked_reasons": [last_error or "specialist_execution_failed"],
+                    "evidence_links": [],
+                    "tool_actions": [],
+                }
+                summary["details"].append(
+                    {
                         "role": role,
-                        "outcome": "completed",
-                        "confidence": 0.6,
-                        "attempt": SPECIALIST_MAX_ATTEMPTS,
-                        "tool_actions": ["fallback_completion_applied"],
-                        "evidence_links": [f"https://your-jira-instance.com/browse/{epic_key}"],
-                        "assumptions_made": [
-                            "Role returned a non-terminal outcome after retries; completion synthesized using role defaults.",
-                            "Follow-up refinement can be done asynchronously without blocking orchestration.",
-                        ],
-                        "summary": f"Fallback completion applied for {role} after retries: {last_error}",
+                        "status": "failed",
+                        "error": last_error or "specialist_execution_failed",
                     }
-                    summary["completed"] += 1
-                    summary["details"].append(
-                        {
-                            "role": role,
-                            "status": "completed_with_fallback",
-                            "attempt": SPECIALIST_MAX_ATTEMPTS,
-                            "outcome": "completed",
-                            "error": last_error,
-                            "evidence_links": 1,
-                            "tool_actions": 1,
-                        }
-                    )
-                else:
-                    summary["failed"] += 1
-                    summary["failed_roles"].append(role)
-                    specification[role] = {
-                        "role": role,
-                        "outcome": "blocked",
-                        "blocked_reasons": [last_error or "specialist_execution_failed"],
-                        "evidence_links": [],
-                        "tool_actions": [],
-                    }
-                    summary["details"].append(
-                        {
-                            "role": role,
-                            "status": "failed",
-                            "error": last_error or "specialist_execution_failed",
-                        }
-                    )
+                )
 
         return summary
 
